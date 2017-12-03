@@ -28,8 +28,7 @@ import Simplify._
 class InlineLocalObjects(val simplifyPhase: Simplify) extends Optimisation {
   import ast.tpd._
 
-  // ValDefs whose rhs is a case class instantiation: potential candidates.
-  val candidates = mutable.HashSet[Symbol]()
+  val candidatesCtors = mutable.HashMap[Symbol, Tree]()
 
   // ValDefs whose lhs is used with `._1` (or any getter call).
   val gettersCalled = mutable.HashSet[Symbol]()
@@ -42,19 +41,19 @@ class InlineLocalObjects(val simplifyPhase: Simplify) extends Optimisation {
   //                          ValDefs of the classes that are being torn apart; = candidates.intersect(gettersCalled)
 
   def clear(): Unit = {
-    candidates.clear()
+    candidatesCtors.clear()
     gettersCalled.clear()
     newFieldsMapping = null
   }
 
   def initNewFieldsMapping()(implicit ctx: Context): Unit =
     if (newFieldsMapping == null) {
-      newFieldsMapping = candidates.intersect(gettersCalled).map { refVal =>
+      newFieldsMapping = candidatesCtors.keySet.intersect(gettersCalled).map { refVal =>
         val accessors = refVal.info.classSymbol.caseAccessors.filter(_.isGetter)
         val newLocals = accessors.map { x =>
           val owner: Symbol  = refVal.owner
           val name:  Name    = LocalOptInlineLocalObj.fresh()
-          val flags: FlagSet = Synthetic
+          val flags: FlagSet = Synthetic | Mutable
           val info:  Type    = x.asSeenFrom(refVal.info).info.finalResultType.widenDealias
           ctx.newSymbol(owner, name, flags, info)
         }
@@ -62,25 +61,15 @@ class InlineLocalObjects(val simplifyPhase: Simplify) extends Optimisation {
       }.toMap
     }
 
-  // Pattern for candidates to this optimisation: ValDefs where the rhs is an
-  // immutable case class instantiation.
-  object NewCaseClassValDef {
-    def unapply(t: ValDef)(implicit ctx: Context): Option[(Tree, List[Tree])] =
-      t.rhs match {
-        case Apply(fun, args)
-          if t.symbol.info.classSymbol.is(CaseClass)                          && // is rhs a case class?
-             !t.symbol.is(Lazy | Mutable)                                     && // is lhs a val?
-             !t.symbol.info.classSymbol.caseAccessors.exists(_.is(Mutable))   && // is the case class immutable?
-             fun.symbol.isConstructor                                         && // is rhs a new?
-             t.tpe.widenDealias == t.symbol.info.finalResultType.widenDealias => // no case class inheritance or enums
-          Some((fun, args))
-        case _ => None
-      }
-  }
+  
+
 
   def visitor(implicit ctx: Context): Tree => Unit = {
-    case t @ NewCaseClassValDef(fun, args) =>
-      candidates += t.symbol
+    case t: ValDef if isCaseClassDef(t) =>
+      caseClassCtor(t.rhs) match {
+        case Some(ctor) => candidatesCtors += t.symbol -> ctor
+        case None => 
+      }
     case t @ Select(qual, _) if isImmutableAccessor(t) =>
       gettersCalled += qual.symbol
     case _ =>
@@ -89,17 +78,21 @@ class InlineLocalObjects(val simplifyPhase: Simplify) extends Optimisation {
   def transformer(implicit ctx: Context): Tree => Tree = {
     initNewFieldsMapping();
     {
-      case t @ NewCaseClassValDef(fun, args) if newFieldsMapping.contains(t.symbol) =>
-        val newFields     = newFieldsMapping(t.symbol).values.toList
-        val newFieldsDefs = newFields.zip(args).map { case (nf, arg) =>
-          val rhs = arg.changeOwnerAfter(t.symbol, nf.symbol, simplifyPhase)
-          ValDef(nf.asTerm, rhs)
-        }
-        val recreate      = cpy.ValDef(t)(rhs = fun.appliedToArgs(newFields.map(x => ref(x))))
-        simplify.println(s"Replacing ${t.symbol.fullName} with stack-allocated fields ($newFields)")
-        Thicket(newFieldsDefs :+ recreate)
+      case t: ValDef if isCaseClassDef(t) && newFieldsMapping.contains(t.symbol) =>
+        candidatesCtors.get(t.symbol) match {
+          case Some(fun) =>
+            val ctor          = transformCaseClassCtor(t.symbol, t.rhs)
+            val newFields     = newFieldsMapping(t.symbol).values.toList
+            val newFieldsDefs = newFields.map(nf => ValDef(nf.asTerm, EmptyTree))
+            val recreate      = cpy.ValDef(t)(rhs = fun.appliedToArgs(newFields.map(x => ref(x))))
+            simplify.println(s"Replacing ${t.symbol.fullName} with stack-allocated fields ($newFields)")
+            Thicket(newFieldsDefs :+ ctor :+ recreate)
 
-      case t @ Select(rec, _) if isImmutableAccessor(t) =>
+          case None => t
+        }
+        
+
+      case t @ Select(rec, _) if isImmutableAccessor(t) && candidatesCtors.contains(rec.symbol) =>
         newFieldsMapping.getOrElse(rec.symbol, Map.empty[Symbol, Symbol]).get(t.symbol) match {
           case None         => t
           case Some(newSym) => ref(newSym)
@@ -108,5 +101,41 @@ class InlineLocalObjects(val simplifyPhase: Simplify) extends Optimisation {
       case t => t
     }
   }
+
+  private def caseClassCtor(tree: Tree)(implicit ctx: Context): Option[Tree] = 
+    tree match {
+      case t @ If(cond, thenp, elsep) => 
+        (caseClassCtor(thenp), caseClassCtor(elsep)) match {
+          case (Some(thenFun), Some(elseFun)) if thenFun.symbol == elseFun.symbol => Some(thenFun)
+          case _ => None
+        }
+
+      case t @ Block(stats, expr) => caseClassCtor(expr)
+      case t @ Apply(fun, args) if fun.symbol.isConstructor => Some(fun)
+      case t => None
+    }
+
+  private def transformCaseClassCtor(lhs: Symbol, tree: Tree)(implicit ctx: Context): Tree = 
+    tree match {
+      case t @ If(cond, thenp, elsep) => 
+        If(cond, transformCaseClassCtor(lhs, thenp), transformCaseClassCtor(lhs, elsep))
+
+      case t @ Block(stats, expr) => 
+        Block(stats, transformCaseClassCtor(lhs, expr))
+
+      case t @ Apply(fun, args)  if fun.symbol.isConstructor => 
+        val newFields = newFieldsMapping(lhs).values.toList 
+        val newFieldsDefs = newFields.zip(args).map { case (nf, arg) => Assign(ref(nf), arg) }
+        Block(newFieldsDefs, EmptyTree)
+
+      case t => t
+    }
+
+
+  private def isCaseClassDef(t: ValDef)(implicit ctx: Context): Boolean = 
+    t.symbol.info.classSymbol.is(CaseClass)                          && // is rhs a case class?
+    !t.symbol.is(Lazy | Mutable)                                     && // is lhs a val?
+    !t.symbol.info.classSymbol.caseAccessors.exists(_.is(Mutable))   && // is the case class immutable?
+    t.tpe.widenDealias == t.symbol.info.finalResultType.widenDealias
 }
 
