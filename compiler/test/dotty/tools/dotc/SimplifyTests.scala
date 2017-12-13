@@ -95,6 +95,11 @@ abstract class SimplifyTests(val optimise: Boolean) extends DottyBytecodeTest {
   @Test def dropNoEffectsTuple =
     check("new Tuple2(1, 3)", "")
 
+
+  /*
+   * InlineLocalObjects
+   */
+
   @Test def inlineLocalObjects =
     check(
       """
@@ -104,6 +109,38 @@ abstract class SimplifyTests(val optimise: Boolean) extends DottyBytecodeTest {
       """
          |val i = 3
          |print(1 + i) // Prevents typer from constant folding 1 + 3 to 4
+      """)
+
+  @Test def inlineConditionalObjects =
+    check(
+      """
+         |val t = if (readBoolean()) (1, 2) else (3, 4)
+         |print(t._1 * t._2)
+      """,
+      """
+         |var a = 0
+         |var b = 0
+         |if (readBoolean()) {
+         |  a = 1
+         |  b = 2
+         |} else {
+         |  a = 3
+         |  b = 4
+         |}
+         |print(a * b)
+      """)
+
+   @Test def constFoldPatMat =
+    check(
+      """
+         |(1, 4) match {
+         |  case (2, 4) => print("a")
+         |  case (x, 4) => print(x)
+         |  case _ => print("match err")
+         |}
+      """,
+      """
+         |print(1)
       """)
 
   @Test def inlineOptions =
