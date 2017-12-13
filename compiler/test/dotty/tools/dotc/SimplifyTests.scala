@@ -133,9 +133,9 @@ abstract class SimplifyTests(val optimise: Boolean) extends DottyBytecodeTest {
    @Test def constFoldPatMat =
     check(
       """
-         |(1, 4) match {
-         |  case (2, 4) => print("a")
-         |  case (x, 4) => print(x)
+         |(1, 4, 8) match {
+         |  case (2, 4, 8) => print("a")
+         |  case (x, 4, y) => print(x + y)
          |  case _ => print("match err")
          |}
       """,

@@ -52,6 +52,7 @@ class Simplify extends MiniPhase with IdentityDenotTransformer {
     new DropGoodCasts               ::
     new DropNoEffects(this)         ::
     new InlineLocalObjects(this)    ::
+    new InlineLocalFunctions(this)  ::
     // new Varify                      :: // varify could stop other transformations from being applied. postponed.
     // new BubbleUpNothing             ::
     new ConstantFold(this)          ::
