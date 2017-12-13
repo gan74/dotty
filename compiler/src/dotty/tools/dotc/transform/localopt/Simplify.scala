@@ -109,11 +109,6 @@ class Simplify extends MiniPhase with IdentityDenotTransformer {
           // Visit
           rhs0.foreachSubTree(optimisation.visitor)
 
-          /*if (optimisation.name == "InlineLocalObjects") {
-            println("------------------------------------------------------------")
-            println(rhs0.show + "\n\n")
-          }*/
-
           // Transform
           rhs0 = new TreeMap() {
             override def transform(tree: Tree)(implicit ctx: Context): Tree = {
@@ -122,16 +117,6 @@ class Simplify extends MiniPhase with IdentityDenotTransformer {
               printIfDifferent(childOptimizedTree, optimisation.transformer(ctx)(childOptimizedTree), optimisation)
             }
           }.transform(rhs0)
-
-          /*if (optimisation.name == "InlineLocalObjects") {
-            println("++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++")
-            println(rhs0.show + "\n\n")
-          }*/
-
-          {
-            println("============================= " + optimisation.name + " =============================")
-            println(rhs0.show + "\n\n")
-          }
 
           // Clean
           optimisation.clear()
