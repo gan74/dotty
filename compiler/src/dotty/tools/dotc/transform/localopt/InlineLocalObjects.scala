@@ -126,7 +126,7 @@ class InlineLocalObjects(val simplifyPhase: Simplify) extends Optimisation {
       case t @ Apply(fun, args)  if fun.symbol.isConstructor => 
         val newFields = newFieldsMapping(lhs).values.toList 
         val newFieldsDefs = newFields.zip(args).map { case (nf, arg) => Assign(ref(nf), arg) }
-        Thicket(newFieldsDefs)
+        Block(newFieldsDefs, EmptyTree)
 
       case t => t
     }

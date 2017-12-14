@@ -778,7 +778,7 @@ object Trees {
               ys = ys.tail
             }
           }
-          for (elem <- flatten(elems)) {
+          for (elem <- elems) {
             assert(!elem.isInstanceOf[Thicket[_]])
             buf += elem
           }
