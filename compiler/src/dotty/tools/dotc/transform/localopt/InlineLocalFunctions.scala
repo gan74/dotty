@@ -44,8 +44,7 @@ class InlineLocalFunctions(val simplifyPhase: Simplify) extends Optimisation {
 
 
   def visitor(implicit ctx: Context): Tree => Unit = {
-    case fn @ FunDef(sym) if fn.vparamss.forall(_.size == 1) => // wat ?
-      functions(sym) = fn
+    case fn @ FunDef(sym) => functions(sym) = fn
 
     case id: Ident if functions.contains(id.symbol) =>
       refs(id.symbol) = refs.getOrElse(id.symbol, 0) + 1
@@ -55,15 +54,14 @@ class InlineLocalFunctions(val simplifyPhase: Simplify) extends Optimisation {
 
 
   def transformer(implicit ctx: Context): Tree => Tree = {
-    case FunDef(sym) if refs.getOrElse(sym, 0) <= 1 =>
+    case FunDef(sym) if functions.contains(sym) && refs.getOrElse(sym, 0) == 0 =>
       EmptyTree
 
-    case Apply(fn, args) if refs.getOrElse(fn.symbol, 0) == 1 =>
+    case call @ Apply(fn, args) if functions.contains(fn.symbol) && refs.getOrElse(fn.symbol, 0) == 1 =>
       val func = functions(fn.symbol)
-      val argDecls = args.zip(func.vparamss).map {
-        case (arg, param) => ValDef(param.head.symbol.asTerm, arg)
-      }
-      Block(argDecls, func.rhs)
+      val params = func.vparamss.flatten
+      if (params.size == args.size) Block(args.zip(params).map { case (arg, param) => ValDef(param.symbol.asTerm, arg) }, func.rhs)
+      else call
 
     case t => t
   }

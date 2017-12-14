@@ -140,7 +140,7 @@ abstract class SimplifyTests(val optimise: Boolean) extends DottyBytecodeTest {
          |}
       """,
       """
-         |print(1)
+         |print(9)
       """)
 
   @Test def inlineOptions =
