@@ -28,9 +28,13 @@ import Simplify._
 class InlineLocalFunctions(val simplifyPhase: Simplify) extends Optimisation {
   import ast.tpd._
 
-  val functions = mutable.Map[Symbol, DefDef]()
+  val defined = mutable.Set[Symbol]()
   val refs = mutable.Map[Symbol, Int]()
-  var discard: Set[Symbol] = null
+  val calls = mutable.Map[Symbol, Int]()
+  var discard: mutable.Set[Symbol] = null
+
+  val functions = mutable.Map[Symbol, DefDef]()
+  val args = mutable.Map[Symbol, Symbol]()
 
   object FunDef {
     def unapply(funDef: DefDef)(implicit ctx: Context): Option[Symbol] = {
@@ -39,50 +43,75 @@ class InlineLocalFunctions(val simplifyPhase: Simplify) extends Optimisation {
   }
 
   def clear(): Unit = {
-    functions.clear()
+    defined.clear()
     refs.clear()
+    calls.clear()
     discard = null
+
+    functions.clear()
+    args.clear()
   }
 
 
   def visitor(implicit ctx: Context): Tree => Unit = {
-    case fn @ FunDef(sym) => functions(sym) = fn
+    case FunDef(sym) => 
+      defined += sym
 
-    case id: Ident if functions.contains(id.symbol) =>
+    case id: Ident if defined.contains(id.symbol) =>
       refs(id.symbol) = refs.getOrElse(id.symbol, 0) + 1
 
-    /*case CaseValDef(sym, _) =>
-      caseVals += sym -> 
-        ctx.newSymbol(
-          sym.owner,
-          LocalOptInlineLocalObj.fresh(), 
-          (sym.flags &~ Case) | Synthetic, 
-          sym.info, 
-          sym.privateWithin, 
-          sym.coord)*/
+    case Apply(fn, _) if defined.contains(fn.symbol) => 
+      calls(fn.symbol) = calls.getOrElse(fn.symbol, 0) + 1
 
     case _ =>
   }
 
 
   def transformer(implicit ctx: Context): Tree => Tree = {
-    if (discard eq null) discard = refs.filter(fun => fun._2 == 1).map(_._1).toSet;
+    if (discard eq null) discard = defined.filter(fun => {
+        val callCount = calls.getOrElse(fun, 0)
+        val refCount = refs.getOrElse(fun, 0)
+        callCount <= 1 && refCount == callCount
+      });
     {
-      case FunDef(sym) if discard.contains(sym) =>
+      case funDef @ FunDef(sym) if discard.contains(sym) =>
+        functions(sym) = funDef
         EmptyTree
 
-      case t @ FunDef(sym) => 
-        t
+      case id: Ident if discard.contains(ctx.owner) && id.symbol.is(Param) =>
+        ref(inlinedSymbol(id.symbol))
 
-      case call @ Apply(fn, caseVals) if functions.contains(fn.symbol) && refs.getOrElse(fn.symbol, 0) == 1 =>
+      case call @ Apply(fn, arguments) if functions.contains(fn.symbol) =>
         val func = functions(fn.symbol)
         val params = func.vparamss.flatten
-        if (params.size == caseVals.size) {
-          Block(caseVals.zip(params).map { case (arg, param) => ValDef(param.symbol.asTerm, arg) }, func.rhs)
+        if (params.size == arguments.size) {
+          Block(arguments.zip(params).map { 
+            case (arg, param) => 
+              val inlined = inlinedSymbol(param.symbol)
+              ValDef(inlined.asTerm, arg) 
+          }, func.rhs)
         } else call
 
       case t => t
     }
   }
+
+
+  private def inlinedSymbol(sym: Symbol)(implicit ctx: Context): Symbol =
+    args.get(sym) match {
+      case Some(s) => s
+      case None =>
+        val s = ctx.newSymbol(
+          sym.owner,
+          LocalOptInlineLocalObj.fresh(), 
+          (sym.flags &~ (Param | Case)) | Synthetic, 
+          sym.info, 
+          sym.privateWithin, 
+          sym.coord)
+
+        args(sym) = s
+        s
+    }
+    
 }
 
