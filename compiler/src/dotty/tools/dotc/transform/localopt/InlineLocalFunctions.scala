@@ -30,6 +30,7 @@ class InlineLocalFunctions(val simplifyPhase: Simplify) extends Optimisation {
 
   val functions = mutable.Map[Symbol, DefDef]()
   val refs = mutable.Map[Symbol, Int]()
+  var discard: Set[Symbol] = null
 
   object FunDef {
     def unapply(funDef: DefDef)(implicit ctx: Context): Option[Symbol] = {
@@ -40,6 +41,7 @@ class InlineLocalFunctions(val simplifyPhase: Simplify) extends Optimisation {
   def clear(): Unit = {
     functions.clear()
     refs.clear()
+    discard = null
   }
 
 
@@ -49,21 +51,38 @@ class InlineLocalFunctions(val simplifyPhase: Simplify) extends Optimisation {
     case id: Ident if functions.contains(id.symbol) =>
       refs(id.symbol) = refs.getOrElse(id.symbol, 0) + 1
 
+    /*case CaseValDef(sym, _) =>
+      caseVals += sym -> 
+        ctx.newSymbol(
+          sym.owner,
+          LocalOptInlineLocalObj.fresh(), 
+          (sym.flags &~ Case) | Synthetic, 
+          sym.info, 
+          sym.privateWithin, 
+          sym.coord)*/
+
     case _ =>
   }
 
 
   def transformer(implicit ctx: Context): Tree => Tree = {
-    case FunDef(sym) if functions.contains(sym) && refs.getOrElse(sym, 0) == 0 =>
-      EmptyTree
+    if (discard eq null) discard = refs.filter(fun => fun._2 == 1).map(_._1).toSet;
+    {
+      case FunDef(sym) if discard.contains(sym) =>
+        EmptyTree
 
-    case call @ Apply(fn, args) if functions.contains(fn.symbol) && refs.getOrElse(fn.symbol, 0) == 1 =>
-      val func = functions(fn.symbol)
-      val params = func.vparamss.flatten
-      if (params.size == args.size) Block(args.zip(params).map { case (arg, param) => ValDef(param.symbol.asTerm, arg) }, func.rhs)
-      else call
+      case t @ FunDef(sym) => 
+        t
 
-    case t => t
+      case call @ Apply(fn, caseVals) if functions.contains(fn.symbol) && refs.getOrElse(fn.symbol, 0) == 1 =>
+        val func = functions(fn.symbol)
+        val params = func.vparamss.flatten
+        if (params.size == caseVals.size) {
+          Block(caseVals.zip(params).map { case (arg, param) => ValDef(param.symbol.asTerm, arg) }, func.rhs)
+        } else call
+
+      case t => t
+    }
   }
 }
 
