@@ -130,7 +130,7 @@ abstract class SimplifyTests(val optimise: Boolean) extends DottyBytecodeTest {
          |print(a * b)
       """)
 
-   @Test def constFoldPatMat =
+  @Test def constFoldPatMat =
     check(
       """
          |(1, 4, 8) match {
@@ -142,6 +142,32 @@ abstract class SimplifyTests(val optimise: Boolean) extends DottyBytecodeTest {
       """
          |print(9)
       """)
+
+  @Test def inlineRemoveLocalFunction =
+    check(
+      """
+         |def fun(x: Int) print(x)
+      """,
+      """""")
+
+
+  @Test def inlineLocalFunction =
+    check(
+      """
+         |def fun(x: Int) print(4 + x)
+         |fun(9)
+      """,
+      """
+         |print(13)
+      """)
+
+  @Test def dontInlineLocalFunction =
+    checkNotEquals(
+      """
+         |def fun(x: Int) print(4 + x)
+         |print(fun)
+      """,
+      """""")
 
   @Test def inlineOptions =
     check(
