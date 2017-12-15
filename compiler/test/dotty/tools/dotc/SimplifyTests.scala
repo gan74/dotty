@@ -146,7 +146,7 @@ abstract class SimplifyTests(val optimise: Boolean) extends DottyBytecodeTest {
   @Test def inlineRemoveLocalFunction =
     check(
       """
-         |def fun(x: Int) print(x)
+         |def fun(x: Int) = print(x)
       """,
       """""")
 
@@ -154,7 +154,7 @@ abstract class SimplifyTests(val optimise: Boolean) extends DottyBytecodeTest {
   @Test def inlineLocalFunction =
     check(
       """
-         |def fun(x: Int) print(4 + x)
+         |def fun(x: Int) = print(4 + x)
          |fun(9)
       """,
       """
@@ -164,7 +164,7 @@ abstract class SimplifyTests(val optimise: Boolean) extends DottyBytecodeTest {
   @Test def dontInlineLocalFunction =
     checkNotEquals(
       """
-         |def fun(x: Int) print(4 + x)
+         |def fun(x: Int) = print(4 + x)
          |print(fun)
       """,
       """""")
