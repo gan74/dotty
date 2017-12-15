@@ -161,13 +161,28 @@ abstract class SimplifyTests(val optimise: Boolean) extends DottyBytecodeTest {
          |print(13)
       """)
 
-  @Test def dontInlineLocalFunction =
+  @Test def inlineToClosure =
     checkNotEquals(
       """
          |def fun(x: Int) = print(4 + x)
          |print(fun)
       """,
-      """""")
+      """
+         |val clsr: Int => Unit = x => print(x + 4)
+         |print(clsr)
+      """)
+
+  @Test def dontInlineLocalFunction =
+    checkNotEquals(
+      """
+         |def fun(x: Int) = print(4 + x)
+         |fun(1)
+         |fun(2)
+      """,
+      """
+        |print(5)
+        |print(6)
+      """)
 
   @Test def inlineOptions =
     check(

@@ -28,12 +28,18 @@ import Simplify._
 class InlineLocalFunctions(val simplifyPhase: Simplify) extends Optimisation {
   import ast.tpd._
 
+  // local functions
   val defined = mutable.Set[Symbol]()
+  // number of time a given function is referenced
   val refs = mutable.Map[Symbol, Int]()
+  // number of time a given function is called
   val calls = mutable.Map[Symbol, Int]()
-  var discard: mutable.Set[Symbol] = null
+  // functions that will be inline and that should be discarded
+  var toDiscard: mutable.Set[Symbol] = null
 
-  val functions = mutable.Map[Symbol, DefDef]()
+  // discarded function symbol -> original def
+  val discarded = mutable.Map[Symbol, DefDef]()
+  // argument map for inlined functions
   val args = mutable.Map[Symbol, Symbol]()
 
   object FunDef {
@@ -46,9 +52,9 @@ class InlineLocalFunctions(val simplifyPhase: Simplify) extends Optimisation {
     defined.clear()
     refs.clear()
     calls.clear()
-    discard = null
+    toDiscard = null
 
-    functions.clear()
+    discarded.clear()
     args.clear()
   }
 
@@ -68,29 +74,31 @@ class InlineLocalFunctions(val simplifyPhase: Simplify) extends Optimisation {
 
 
   def transformer(implicit ctx: Context): Tree => Tree = {
-    if (discard eq null) discard = defined.filter(fun => {
+    if (toDiscard eq null) toDiscard = defined.filter(fun => {
         val callCount = calls.getOrElse(fun, 0)
         val refCount = refs.getOrElse(fun, 0)
+        // we inline everything called at most once and that is not referenced otherwise
         callCount <= 1 && refCount == callCount
       });
     {
-      case funDef @ FunDef(sym) if discard.contains(sym) =>
-        functions(sym) = funDef
+      case funDef @ FunDef(sym) if toDiscard.contains(sym) =>
+        discarded(sym) = funDef
         EmptyTree
 
-      case id: Ident if discard.contains(ctx.owner) && id.symbol.is(Param) =>
+      case id: Ident if toDiscard.contains(ctx.owner) && id.symbol.is(Param) =>
+        // this is the parameter of a function that will be inlined, change it to a non param symbol
         ref(inlinedSymbol(id.symbol))
 
-      case call @ Apply(fn, arguments) if functions.contains(fn.symbol) =>
-        val func = functions(fn.symbol)
+      case call @ Apply(fn, arguments) if discarded.contains(fn.symbol) =>
+        // def all arguements then inline
+        val func = discarded(fn.symbol)
         val params = func.vparamss.flatten
-        if (params.size == arguments.size) {
-          Block(arguments.zip(params).map { 
-            case (arg, param) => 
-              val inlined = inlinedSymbol(param.symbol)
-              ValDef(inlined.asTerm, arg) 
-          }, func.rhs)
-        } else call
+        assert(params.size == arguments.size) 
+        Block(arguments.zip(params).map { 
+          case (arg, param) => 
+            val inlined = inlinedSymbol(param.symbol)
+            ValDef(inlined.asTerm, arg) 
+        }, func.rhs)
 
       case t => t
     }
