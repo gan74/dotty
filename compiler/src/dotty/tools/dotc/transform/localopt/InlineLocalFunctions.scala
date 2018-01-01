@@ -29,83 +29,99 @@ class InlineLocalFunctions(val simplifyPhase: Simplify) extends Optimisation {
   import ast.tpd._
 
   // local functions
-  val defined = mutable.Set[Symbol]()
+  val defined = mutable.Map[Symbol, DefDef]()
   // number of time a given function is referenced
   val refs = mutable.Map[Symbol, Int]()
   // number of time a given function is called
   val calls = mutable.Map[Symbol, Int]()
-  // functions that will be inline and that should be discarded
-  var toDiscard: mutable.Set[Symbol] = null
 
-  // discarded function symbol -> original def
-  val discarded = mutable.Map[Symbol, DefDef]()
-  // argument map for inlined functions
-  val args = mutable.Map[Symbol, Symbol]()
+
 
   object FunDef {
-    def unapply(funDef: DefDef)(implicit ctx: Context): Option[Symbol] = {
-      Some(funDef.symbol)
-    }
+    def unapply(funDef: DefDef)(implicit ctx: Context): Option[Symbol] =
+      if (funDef.symbol.is(Method) && 
+          !funDef.symbol.is(Override) && 
+          funDef.symbol.owner.is(Method) &&
+          funDef.symbol.owner == ctx.owner) Some(funDef.symbol)
+      else None
   }
 
   def clear(): Unit = {
     defined.clear()
     refs.clear()
     calls.clear()
-    toDiscard = null
-
-    discarded.clear()
-    args.clear()
   }
 
 
   def visitor(implicit ctx: Context): Tree => Unit = {
-    case FunDef(sym) => 
-      defined += sym
+    case funDef @ FunDef(sym) => 
+      defined += sym -> funDef
 
-    case id: Ident if defined.contains(id.symbol) =>
-      refs(id.symbol) = refs.getOrElse(id.symbol, 0) + 1
+    case Apply(fn, _) => 
+      val sym = fn.symbol 
+      //if (defined.contains(sym))
+        calls(sym) = calls.getOrElse(sym, 0) + 1
 
-    case Apply(fn, _) if defined.contains(fn.symbol) => 
-      calls(fn.symbol) = calls.getOrElse(fn.symbol, 0) + 1
+    case t if t.denot.exists => 
+      val sym = t.symbol 
+      if (defined.contains(sym))
+        refs(sym) = refs.getOrElse(sym, 0) + 1
 
-    case _ =>
+    case _ => 
   }
 
 
   def transformer(implicit ctx: Context): Tree => Tree = {
-    if (toDiscard eq null) toDiscard = defined.filter(fun => {
-        val callCount = calls.getOrElse(fun, 0)
-        val refCount = refs.getOrElse(fun, 0)
-        // we inline everything called at most once and that is not referenced otherwise
-        callCount <= 1 && refCount == callCount
-      });
-    {
-      case funDef @ FunDef(sym) if toDiscard.contains(sym) =>
-        discarded(sym) = funDef
-        EmptyTree
+    /*case FunDef(sym) if defined.contains(sym) && shouldDiscard(sym) =>
+      EmptyTree*/
 
-      case id: Ident if toDiscard.contains(ctx.owner) && id.symbol.is(Param) =>
-        // this is the parameter of a function that will be inlined, change it to a non param symbol
-        ref(inlinedSymbol(id.symbol))
+    case call @ Apply(fn, arguments) if defined.contains(fn.symbol) && shouldInline(fn.symbol) && !isRecCall(fn.symbol) =>
+      // def all arguements then inline
+      val func = defined(fn.symbol)
+      val params = func.vparamss.flatten
+      assert(params.size == arguments.size)
 
-      case call @ Apply(fn, arguments) if discarded.contains(fn.symbol) =>
-        // def all arguements then inline
-        val func = discarded(fn.symbol)
-        val params = func.vparamss.flatten
-        assert(params.size == arguments.size) 
-        Block(arguments.zip(params).map { 
-          case (arg, param) => 
-            val inlined = inlinedSymbol(param.symbol)
-            ValDef(inlined.asTerm, arg) 
-        }, func.rhs)
+      val inlinedArgs = mutable.Map[Symbol, Symbol]()
+      val bindings = arguments.zip(params).map { 
+        case (arg, param) => cpy.ValDef(param)(rhs = arg)
+      }
+      val body = func.rhs
 
-      case t => t
+      print(fn.symbol + " inlined ")
+      var owner = ctx.owner
+      while(owner.exists) {
+        print("into " + owner + " ")
+        owner = owner.owner
+      }
+      println("")
+
+      Inlined(call, bindings, body).changeOwner(fn.symbol, ctx.owner)
+
+    case t => t
+  }
+
+  private def isRecCall(fn: Symbol)(implicit ctx: Context): Boolean = {
+    var owner = ctx.owner
+    while(owner.exists) {
+      if (owner == fn) {
+        return true
+      }
+      owner = owner.owner
     }
+    false
+  }
+
+  private def shouldDiscard(fn: Symbol): Boolean = refs.getOrElse(fn, 0) == 0
+
+  private def shouldInline(fn: Symbol): Boolean = {
+    val callCount = calls.getOrElse(fn, 0)
+    val refCount = refs.getOrElse(fn, 0)
+    // we inline everything called at most once and that is not referenced otherwise
+    callCount <= 1 && refCount == callCount
   }
 
 
-  private def inlinedSymbol(sym: Symbol)(implicit ctx: Context): Symbol =
+  /*private def inlinedSymbol(sym: Symbol)(implicit ctx: Context): Symbol =
     args.get(sym) match {
       case Some(s) => s
       case None =>
@@ -119,7 +135,6 @@ class InlineLocalFunctions(val simplifyPhase: Simplify) extends Optimisation {
 
         args(sym) = s
         s
-    }
-    
+    }*/
 }
 

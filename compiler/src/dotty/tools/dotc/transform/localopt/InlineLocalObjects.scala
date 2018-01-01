@@ -86,7 +86,7 @@ class InlineLocalObjects(val simplifyPhase: Simplify) extends Optimisation {
             val newFieldsDefs = newFields.map(nf => ValDef(nf.asTerm, EmptyTree))
             val recreate      = cpy.ValDef(t)(rhs = fun.appliedToArgs(newFields.map(x => ref(x))))
             simplify.println(s"Replacing ${t.symbol.fullName} with stack-allocated fields ($newFields)")
-            Thicket(newFieldsDefs :+ ctor :+ recreate)
+            Block(newFieldsDefs :+ ctor, recreate)
 
           case None => t
         }
