@@ -14,7 +14,7 @@ abstract class SimplifyTests(val optimise: Boolean) extends DottyBytecodeTest {
   override protected def initializeCtx(c: FreshContext): Unit = {
     super.initializeCtx(c)
     if (optimise) {
-      val flags = Array("-optimise") // :+ "-Xprint:simplify"
+      val flags = Array("-optimise") :+ "-Ycheck:All" // :+ "-Xprint:simplify"
       val summary = CompilerCommand.distill(flags)(c)
       c.setSettings(summary.sstate)
     }
@@ -160,6 +160,55 @@ abstract class SimplifyTests(val optimise: Boolean) extends DottyBytecodeTest {
       """
          |print(13)
       """)
+
+  @Test def inlineLocalFunctionWithVals =
+    check(
+      """
+         |val b = 4
+         |def fun(x: Int) = {
+         |  val y = readInt()
+         |  x + b + y
+         |}
+         |print(fun(9))
+      """,
+      """
+         |print(readInt() + 13)
+      """)
+
+  // check it compiles fine 
+  @Test def inlineLocalRecFunction =
+    checkNotEquals(
+      """
+         |def facto(x: Int): Int = if (x <= 1) 1 else facto(x - 1) * x
+         |print(facto(4))
+      """,
+      """""")
+
+  // check it compiles fine
+  @Test def inlineLocalNestedFunction =
+    checkNotEquals(
+      """
+         |def foo(x: Int): Int = if (x < 0) bar(x) else x / 2
+         |def bar(x: Int): Int = foo(x + 1) 
+         |print(foo(-4))
+      """,
+      """""")
+
+  /*@Test def inlineLocalMultipleReturns =
+    check(
+      """
+         |def fun(x: Int): Int = {
+         |  var i = 0
+         |  while (readBoolean()) {
+         |    if (readInt() != x) return i
+         |    i = i + 1
+         |  }
+         |  return -i
+         |}
+         |fun(9)
+      """,
+      """
+      """)*/
 
   /*@Test def inlineToClosure =
     check(

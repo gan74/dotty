@@ -24,7 +24,7 @@ class InlineLabelsCalledOnce extends Optimisation {
   }
 
   def visitor(implicit ctx: Context): Tree => Unit = {
-    case d: DefDef if d.symbol.is(Label)  =>
+    case d: DefDef if d.symbol.is(Label) =>
       var isRecursive = false
       d.rhs.foreachSubTree { x =>
         if (x.symbol == d.symbol)
@@ -43,9 +43,15 @@ class InlineLabelsCalledOnce extends Optimisation {
   def transformer(implicit ctx: Context): Tree => Tree = {
     case a: Apply =>
       defined.get(a.symbol) match {
-        case Some(defDef) if usedOnce(a) && a.symbol.info.paramInfoss == List(Nil) =>
+        case Some(defDef) if usedOnce(a.symbol) =>
           simplify.println(s"Inlining labeldef ${defDef.name}")
-          defDef.rhs.changeOwner(defDef.symbol, ctx.owner)
+          val args = a.args
+          val params = defDef.vparamss.flatten
+          assert(params.size == args.size)
+          val bindings = args.zip(params).map {
+            case (arg, param) => cpy.ValDef(param)(rhs = arg)
+          }
+          Block(bindings, defDef.rhs.changeOwner(defDef.symbol, ctx.owner))
 
         case Some(defDef) if defDef.rhs.isInstanceOf[Literal] =>
           defDef.rhs
@@ -53,23 +59,23 @@ class InlineLabelsCalledOnce extends Optimisation {
         case _ => a
       }
 
-    case d: DefDef if usedOnce(d) =>
-      simplify.println(s"Dropping labeldef (used once) ${d.name} ${timesUsed.get(d.symbol)}")
+    case d: DefDef if usedOnce(d.symbol) =>
+      println(s"Dropping labeldef (used once) ${d.name} ${timesUsed.get(d.symbol)}")
       defined.update(d.symbol, d)
       EmptyTree
 
-    case d: DefDef if neverUsed(d) =>
-      simplify.println(s"Dropping labeldef (never used) ${d.name} ${timesUsed.get(d.symbol)}")
+    case d: DefDef if neverUsed(d.symbol) =>
+      println(s"Dropping labeldef (never used) ${d.name} ${timesUsed.get(d.symbol)}")
       EmptyTree
 
     case t => t
   }
 
-  def usedN(t: Tree, n: Int)(implicit ctx: Context): Boolean =
-    t.symbol.is(Label)                    &&
-    timesUsed.getOrElse(t.symbol, 0) == n &&
-    defined.contains(t.symbol)
+  def usedN(s: Symbol, n: Int)(implicit ctx: Context): Boolean =
+    s.is(Label)                    &&
+    timesUsed.getOrElse(s, 0) == n &&
+    defined.contains(s)
 
-  def usedOnce(t: Tree)(implicit ctx: Context): Boolean  = usedN(t, 1)
-  def neverUsed(t: Tree)(implicit ctx: Context): Boolean = usedN(t, 0)
+  def usedOnce(s: Symbol)(implicit ctx: Context): Boolean  = usedN(s, 1)
+  def neverUsed(s: Symbol)(implicit ctx: Context): Boolean = usedN(s, 0)
 }

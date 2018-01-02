@@ -22,7 +22,7 @@ import Simplify._
  *  If a local instance does not escape the local scope, it will be removed
  *  later by DropNoEffects, thus implementing the equivalent of (local) multi
  *  parameter value classes. The main motivation for this transformation is to
- *  get ride of the intermediate tuples object somes created when pattern
+ *  get rid of the intermediate tuples object somes created when pattern
  *  matching on Scala2 case classes.
  */
 class InlineLocalObjects(val simplifyPhase: Simplify) extends Optimisation {
