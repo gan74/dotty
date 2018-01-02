@@ -185,14 +185,14 @@ class Valify(val simplifyPhase: Simplify) extends Optimisation {
     Block(newStats, newExpr)
   }
 
-  private def isVar(s: Symbol)(implicit ctx: Context): Boolean =  s.is(Mutable) && !s.is(Method) && !s.owner.isClass
-  private def isVal(s: Symbol)(implicit ctx: Context): Boolean = !s.is(Mutable) && !s.is(Method) && !s.owner.isClass
+  private def isVar(s: Symbol)(implicit ctx: Context): Boolean =  (s.is(Mutable) || s.is(Case)) && !s.is(Method) && !s.owner.isClass
+  private def isVal(s: Symbol)(implicit ctx: Context): Boolean = (!s.is(Mutable) && !s.is(Case)) && !s.is(Method) && !s.owner.isClass
 
   private def valifiedSymbol(sym: Symbol)(implicit ctx: Context): Symbol = 
     ctx.newSymbol(
       ctx.owner,       // valified symbols can have a narrower scope than the original symbol
       LocalOptValifyName.fresh(), 
-      (sym.flags &~ Mutable) | Synthetic, 
+      (sym.flags &~ (Mutable | Case)) | Synthetic, 
       sym.info, 
       sym.privateWithin, 
       sym.coord)
