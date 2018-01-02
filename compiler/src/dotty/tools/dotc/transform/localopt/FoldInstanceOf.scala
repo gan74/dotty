@@ -24,7 +24,6 @@ class FoldInstanceOf extends Optimisation {
   val defined = newMutableSymbolMap[ValDef]
 
   def clear(): Unit = {
-    println(defined.toMap.map(_._1))
     defined.clear()
   }
 
