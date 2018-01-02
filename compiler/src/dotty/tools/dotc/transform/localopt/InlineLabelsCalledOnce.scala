@@ -60,12 +60,12 @@ class InlineLabelsCalledOnce extends Optimisation {
       }
 
     case d: DefDef if usedOnce(d.symbol) =>
-      println(s"Dropping labeldef (used once) ${d.name} ${timesUsed.get(d.symbol)}")
+      simplify.println(s"Dropping labeldef (used once) ${d.name} ${timesUsed.get(d.symbol)}")
       defined.update(d.symbol, d)
       EmptyTree
 
     case d: DefDef if neverUsed(d.symbol) =>
-      println(s"Dropping labeldef (never used) ${d.name} ${timesUsed.get(d.symbol)}")
+      simplify.println(s"Dropping labeldef (never used) ${d.name} ${timesUsed.get(d.symbol)}")
       EmptyTree
 
     case t => t

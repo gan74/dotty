@@ -150,50 +150,6 @@ abstract class SimplifyTests(val optimise: Boolean) extends DottyBytecodeTest {
       """,
       """""")
 
-
-  @Test def inlineLocalFunction =
-    check(
-      """
-         |def fun(x: Int) = print(4 + x)
-         |fun(9)
-      """,
-      """
-         |print(13)
-      """)
-
-  @Test def inlineLocalFunctionWithVals =
-    check(
-      """
-         |val b = 4
-         |def fun(x: Int) = {
-         |  val y = readInt()
-         |  x + b + y
-         |}
-         |print(fun(9))
-      """,
-      """
-         |print(readInt() + 13)
-      """)
-
-  // check it compiles fine 
-  @Test def inlineLocalRecFunction =
-    checkNotEquals(
-      """
-         |def facto(x: Int): Int = if (x <= 1) 1 else facto(x - 1) * x
-         |print(facto(4))
-      """,
-      """""")
-
-  // check it compiles fine
-  @Test def inlineLocalNestedFunction =
-    checkNotEquals(
-      """
-         |def foo(x: Int): Int = if (x < 0) bar(x) else x / 2
-         |def bar(x: Int): Int = foo(x + 1) 
-         |print(foo(-4))
-      """,
-      """""")
-
   /*@Test def inlineLocalMultipleReturns =
     check(
       """
