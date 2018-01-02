@@ -50,9 +50,17 @@ import Simplify.desugarIdent
 
     case If(cond1, thenp1, If(cond2, thenp2, elsep2)) if isSimilar(thenp1, elsep2) =>
       If(cond1.select(defn.Boolean_||).appliedTo(cond2.select(defn.Boolean_!).ensureApplied), thenp1, thenp2)
+
+    case If(cond1, If(cond2, thenp2, elsep2), elsep1) if isSimilar(cond1, cond2) =>
+      If(cond1, thenp2, elsep1)
+
+    case If(cond1, thenp1, If(cond2, thenp2, elsep2)) if isSimilar(cond1, cond2) =>
+      If(cond1, thenp1, elsep2)
     
     case If(If(cond, then1, else1), then2, else2) =>
       If(cond.select(defn.Boolean_&&).appliedTo(then1).select(defn.Boolean_||).appliedTo(else1), then2, else2)
+
+
 
     case If(t: Literal, thenp, elsep) =>
       if (t.const.booleanValue) thenp
