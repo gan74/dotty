@@ -101,6 +101,12 @@ import Simplify.desugarIdent
       if meth1.symbol == defn.Boolean_! && meth2.symbol == defn.Boolean_! && !ctx.erasedTypes =>
         rec
 
+    // unary ops
+    case t @ Select(lhs: Literal, _) =>
+      val s = ConstFold.apply(t)
+      if ((s ne null) && s.tpe.isInstanceOf[ConstantType]) Literal(s.tpe.asInstanceOf[ConstantType].value)
+      else t
+
     case t @ Apply(Select(lhs, _), List(rhs)) =>
       val sym = t.symbol
       (lhs, rhs) match {
