@@ -88,9 +88,7 @@ import Simplify.desugarIdent
     case If(t @ Apply(Select(recv, _), Nil), thenp, elsep) if t.symbol eq defn.Boolean_! =>
       If(recv, elsep, thenp)
 
-    case t @ Apply(meth1: Select, List(If(cond, thenp, elsep)))
-      if isPureExpr(t) =>
-        println(t.show + "\n =======> \n " + If(cond, Apply(meth1, List(thenp)), Apply(meth1, List(elsep))).show + "\n")
+    case t @ Apply(meth1: Select, List(If(cond, thenp, elsep))) if isPureExpr(t) =>
         If(cond, Apply(meth1, List(thenp)), Apply(meth1, List(elsep)))
 
     // TODO: similar trick for comparisons.
