@@ -80,8 +80,15 @@ import Simplify.desugarIdent
     case If(t @ Select(recv, _), thenp, elsep) if t.symbol eq defn.Boolean_! =>
       If(recv, elsep, thenp)
 
+    case If(If(cond, then1, else1), then2, else2) =>
+      If(cond.select(defn.Boolean_&&).appliedTo(then1).select(defn.Boolean_||).appliedTo(else1), then2, else2)
+
     case If(t @ Apply(Select(recv, _), Nil), thenp, elsep) if t.symbol eq defn.Boolean_! =>
       If(recv, elsep, thenp)
+
+    case t @ Apply(meth1 @ Select(op, a1), List(If(cond, thenp, elsep)))
+      if isPureExpr(meth1) =>
+        If(cond, Apply(meth1, List(thenp)), Apply(meth1, List(elsep)))
 
     // TODO: similar trick for comparisons.
     // TODO: handle comparison with min\max values

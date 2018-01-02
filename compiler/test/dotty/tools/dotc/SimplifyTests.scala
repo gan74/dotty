@@ -164,6 +164,17 @@ abstract class SimplifyTests(val optimise: Boolean) extends DottyBytecodeTest {
         |print(8)
       """)
 
+  @Test def inlineCaseOfCase =
+    check(
+      """
+         |val i = readInt()
+         |(i match { case 0 => 7; case x => x + 1 }) match {
+         | case 7 => print(0)
+         | case x => print("not zero")
+         |}
+      """,
+      """""")
+
   // @Test def listPatmapExample =
   //   check(
   //     """
