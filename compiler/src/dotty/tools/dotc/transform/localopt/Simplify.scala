@@ -64,6 +64,7 @@ class Simplify extends MiniPhase with IdentityDenotTransformer {
     new Jumpjump                    ::
     new DropGoodCasts               ::
     new DropNoEffects(this)         ::
+    new FoldInstanceOf              ::
     new ConstantFold(this)          ::
     Nil
 
