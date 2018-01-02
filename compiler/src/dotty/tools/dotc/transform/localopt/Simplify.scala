@@ -122,8 +122,6 @@ class Simplify extends MiniPhase with IdentityDenotTransformer {
           optimisation.clear()
         }
       }
-      println("----------------------------------------------------------")
-      println(rhs0.show + " \n\n")
       if (rhs0 ne tree.rhs) tpd.cpy.DefDef(tree)(rhs = rhs0)
       else tree
     } else tree

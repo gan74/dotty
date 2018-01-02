@@ -50,6 +50,9 @@ import Simplify.desugarIdent
 
     case If(cond1, thenp1, If(cond2, thenp2, elsep2)) if isSimilar(thenp1, elsep2) =>
       If(cond1.select(defn.Boolean_||).appliedTo(cond2.select(defn.Boolean_!).ensureApplied), thenp1, thenp2)
+    
+    case If(If(cond, then1, else1), then2, else2) =>
+      If(cond.select(defn.Boolean_&&).appliedTo(then1).select(defn.Boolean_||).appliedTo(else1), then2, else2)
 
     case If(t: Literal, thenp, elsep) =>
       if (t.const.booleanValue) thenp
@@ -80,14 +83,14 @@ import Simplify.desugarIdent
     case If(t @ Select(recv, _), thenp, elsep) if t.symbol eq defn.Boolean_! =>
       If(recv, elsep, thenp)
 
-    case If(If(cond, then1, else1), then2, else2) =>
-      If(cond.select(defn.Boolean_&&).appliedTo(then1).select(defn.Boolean_||).appliedTo(else1), then2, else2)
+    
 
     case If(t @ Apply(Select(recv, _), Nil), thenp, elsep) if t.symbol eq defn.Boolean_! =>
       If(recv, elsep, thenp)
 
-    case t @ Apply(meth1 @ Select(op, a1), List(If(cond, thenp, elsep)))
-      if isPureExpr(meth1) =>
+    case t @ Apply(meth1: Select, List(If(cond, thenp, elsep)))
+      if isPureExpr(t) =>
+        println(t.show + "\n =======> \n " + If(cond, Apply(meth1, List(thenp)), Apply(meth1, List(elsep))).show + "\n")
         If(cond, Apply(meth1, List(thenp)), Apply(meth1, List(elsep)))
 
     // TODO: similar trick for comparisons.

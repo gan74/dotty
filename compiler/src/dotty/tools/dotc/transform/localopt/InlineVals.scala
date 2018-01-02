@@ -17,29 +17,20 @@ import transform.SymUtils._
 import config.Printers.simplify
 import Simplify._
 
-/** Rewrite fields of local instances as vals.
- *
- *  If a local instance does not escape the local scope, it will be removed
- *  later by DropNoEffects, thus implementing the equivalent of (local) multi
- *  parameter value classes. The main motivation for this transformation is to
- *  get rid of the intermediate tuples object somes created when pattern
- *  matching on Scala2 case classes.
- */
+
 class InlineVals extends Optimisation {
   import ast.tpd._
-
 
   val defined = newMutableSymbolMap[ValDef]
   val timesUsed = newMutableSymbolMap[Int]
 
   def clear(): Unit = {
-   
     defined.clear()
     timesUsed.clear()
   }
 
   def visitor(implicit ctx: Context): Tree => Unit = {
-    case t: ValDef if isVal(t.symbol) => 
+    case t: ValDef if t.rhs != EmptyTree && isVal(t.symbol) => 
       if (isPureExpr(t.rhs))
         defined.put(t.symbol, t)
 
@@ -52,11 +43,10 @@ class InlineVals extends Optimisation {
 
   def transformer(implicit ctx: Context): Tree => Tree = {
     case t: ValDef if timesUsed.getOrElse(t.symbol, 0) == 1 =>
-      //println("inlining " + t.show)
       EmptyTree
 
     case t: Ident if timesUsed.getOrElse(t.symbol, 0) == 1 =>
-      defined(t.symbol).rhs
+      defined(t.symbol).rhs.changeOwner(t.symbol.owner, ctx.owner)
 
     case t => t
   }
