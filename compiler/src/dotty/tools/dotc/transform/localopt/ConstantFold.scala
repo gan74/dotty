@@ -2,6 +2,7 @@ package dotty.tools.dotc
 package transform.localopt
 
 import core.Contexts.Context
+import core.Constants.Constant
 import core.Symbols._
 import core.Types._
 import typer.ConstFold
@@ -146,6 +147,12 @@ import Simplify.desugarIdent
           val const = asConst(l.tpe).value.booleanValue
           if (l.const.booleanValue) l
           else Block(lhs :: Nil, rhs)
+
+        case (Literal(Constant(false)), _) if sym == defn.Boolean_&& =>
+          Literal(Constant(false))
+
+        case (Literal(Constant(true)), _) if sym == defn.Boolean_|| =>
+          Literal(Constant(true))
 
         // case (Literal(Constant(1)), _)    if sym == defn.Int_*  => rhs
         // case (Literal(Constant(0)), _)    if sym == defn.Int_+  => rhs
