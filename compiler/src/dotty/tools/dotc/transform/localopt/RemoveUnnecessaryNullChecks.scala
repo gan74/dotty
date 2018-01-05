@@ -63,14 +63,25 @@ class RemoveUnnecessaryNullChecks extends Optimisation {
   def transformer(implicit ctx: Context): Tree => Tree = {
     case NullCheck(sym) if !ignore.contains(sym) => ref(checked(sym))
 
-    case t: ValDef if !ignore.contains(t.symbol) && checked.contains(t.symbol) =>
+    case t: ValDef if checked.contains(t.symbol) && !ignore.contains(t.symbol) =>
       val isNull = nullness(t.rhs) match {
         case Some(n) => Literal(Constant(n))
         case None => nullcheck(t.symbol)
       }
-      println(t.show + " => " + isNull.show)
 
       Thicket(List(t, ValDef(checked(t.symbol).asTerm, isNull)))
+
+    case blk @ Block(stats, expr) =>
+      val newStats = stats.mapConserve {
+        case s @ Apply(Select(id: Ident, _), _) if checked.contains(id.symbol) && !ignore.contains(id.symbol) =>
+          val toFalse = Assign(ref(checked(id.symbol)), Literal(Constant(false)))
+          Thicket(List(s, toFalse))
+          
+        case s => s
+      }
+
+
+      cpy.Block(blk)(newStats, expr)
 
     case t => t
   }
