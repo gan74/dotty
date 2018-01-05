@@ -27,6 +27,7 @@ class RemoveUnnecessaryNullChecks extends Optimisation {
   import ast.tpd._
 
   val checked = newMutableSymbolMap[Symbol]
+  val ignore = mutable.Set[Symbol]()
 
 
 
@@ -40,12 +41,15 @@ class RemoveUnnecessaryNullChecks extends Optimisation {
       }
   }
 
-  def clear(): Unit = checked.clear()
+  def clear(): Unit = {
+    checked.clear()
+    ignore.clear()
+  }
 
   def visitor(implicit ctx: Context): Tree => Unit = {
     case t: ValDef =>
       t.rhs match {
-        case NullCheck(sym) if isVar(t.symbol) => checked.put(t.symbol, sym)
+        case NullCheck(sym) => ignore += sym
         case _ =>
       }
 
@@ -57,9 +61,9 @@ class RemoveUnnecessaryNullChecks extends Optimisation {
 
 
   def transformer(implicit ctx: Context): Tree => Tree = {
-    case NullCheck(sym) => ref(checked(sym))
+    case NullCheck(sym) if !ignore.contains(sym) => ref(checked(sym))
 
-    case t: ValDef if checked.contains(t.symbol) =>
+    case t: ValDef if !ignore.contains(t.symbol) && checked.contains(t.symbol) =>
       val isNull = nullness(t.rhs) match {
         case Some(n) => Literal(Constant(n))
         case None => nullcheck(t.symbol)

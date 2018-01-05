@@ -314,6 +314,7 @@ object NameKinds {
 
   val LocalOptInlineLocalObj  = new UniqueNameKind("ilo")
   val LocalOptNullChecksName  = new UniqueNameKind("nullcheck")
+  val LocalOptValifyName      = new UniqueNameKind("valify")
 
   /** The kind of names of default argument getters */
   val DefaultGetterName = new NumberedNameKind(DEFAULTGETTER, "DefaultGetter") {
