@@ -313,6 +313,7 @@ object NameKinds {
   val PatMatSelectorName      = new UniqueNameKind("selector")
 
   val LocalOptInlineLocalObj  = new UniqueNameKind("ilo")
+  val LocalOptNullChecksName  = new UniqueNameKind("nullcheck")
 
   /** The kind of names of default argument getters */
   val DefaultGetterName = new NumberedNameKind(DEFAULTGETTER, "DefaultGetter") {

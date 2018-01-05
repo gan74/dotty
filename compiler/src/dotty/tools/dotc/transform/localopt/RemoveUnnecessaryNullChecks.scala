@@ -3,6 +3,7 @@ package transform.localopt
 
 import core.Constants.{Constant, NullTag}
 import core.Contexts.Context
+import core.NameKinds.LocalOptNullChecksName
 import core.Symbols._
 import core.Types._
 import core.Flags._
@@ -25,6 +26,10 @@ import scala.collection.mutable
 class RemoveUnnecessaryNullChecks extends Optimisation {
   import ast.tpd._
 
+  val checked = newMutableSymbolMap[Symbol]
+
+
+
   // matches sym == null or null == sym
   object NullCheck {
     def unapply(t: Apply)(implicit ctx: Context): Option[Symbol] =
@@ -35,62 +40,35 @@ class RemoveUnnecessaryNullChecks extends Optimisation {
       }
   }
 
-  def clear(): Unit = ()
+  def clear(): Unit = checked.clear()
 
-  def visitor(implicit ctx: Context): Tree => Unit = NoVisitor
+  def visitor(implicit ctx: Context): Tree => Unit = {
+    case t: ValDef =>
+      t.rhs match {
+        case NullCheck(sym) if isVar(t.symbol) => checked.put(t.symbol, sym)
+        case _ =>
+      }
+
+    case NullCheck(sym) if !checked.contains(sym) =>
+      checked.put(sym, companionSymbol(sym))
+
+    case _ => 
+  }
 
 
   def transformer(implicit ctx: Context): Tree => Tree = {
-    // transform tree recursively replacing nullchecks for symbols in nullness
-    def transform(tree: Tree, nullness: mutable.Map[Symbol, Boolean]) =
-      if (nullness.isEmpty) tree
-      else new TreeMap() {
-          override def transform(tree: Tree)(implicit ctx: Context): Tree = {
-            val innerCtx = if (tree.isDef && tree.symbol.exists) ctx.withOwner(tree.symbol) else ctx
-            super.transform(tree)(innerCtx) match {
-              case t @ NullCheck(sym) if nullness.contains(sym) => Literal(Constant(nullness(sym)))
-              case t => t
-            }
-          }
-        }.transform(tree)
+    case NullCheck(sym) => ref(checked(sym))
 
-    {
-      case blk @ Block(stats, expr) => 
-        // (symbol -> is null) elements for which we don't have informations aren't in the map
-        val nullness = mutable.Map[Symbol, Boolean]()
+    case t: ValDef if checked.contains(t.symbol) =>
+      val isNull = nullness(t.rhs) match {
+        case Some(n) => Literal(Constant(n))
+        case None => nullcheck(t.symbol)
+      }
+      println(t.show + " => " + isNull.show)
 
-        // map statements and propagate nullness
-        val newStats = stats.mapConserve {
-          case t: ValDef if !isVar(t.symbol) => 
-            if (isAlwaysNull(t.rhs)) nullness += t.symbol -> true
-            if (isNeverNull(t.rhs)) nullness += t.symbol -> false
-            t
+      Thicket(List(t, ValDef(checked(t.symbol).asTerm, isNull)))
 
-          // throw NPE if id is null
-          case t @ Apply(Select(id: Ident, _), _) if !isVar(id.symbol) => 
-            nullness += id.symbol -> false
-            t
-
-          case t => 
-            transform(t, nullness)
-        }
-
-        cpy.Block(blk)(newStats, transform(expr, nullness))
-
-      // if (x == null)
-      case br @ If(cond @ NullCheck(sym), thenp, elsep) => 
-        val newThen = transform(thenp, mutable.Map(sym -> true))
-        val newElse = transform(elsep, mutable.Map(sym -> false))
-        cpy.If(br)(cond, newThen, newElse)
-
-      // if (x != null)
-      case br @ If(cond @ Select(NullCheck(sym), _), thenp, elsep) if cond.symbol eq defn.Boolean_! =>
-        val newThen = transform(thenp, mutable.Map(sym -> false))
-        val newElse = transform(elsep, mutable.Map(sym -> true))
-        cpy.If(br)(cond, newThen, newElse)
-
-      case t => t
-    }
+    case t => t
   }
 
 
@@ -117,5 +95,15 @@ class RemoveUnnecessaryNullChecks extends Optimisation {
       case _ => false
     }
 
+  private def nullness(tree: Tree)(implicit ctx: Context): Option[Boolean] = 
+    if (isNeverNull(tree)) Some(false)
+    else if (isAlwaysNull(tree)) Some(true)
+    else None
+
   private def isVar(s: Symbol)(implicit ctx: Context): Boolean = s.is(Mutable | Lazy)
+
+  private def nullcheck(sym: Symbol)(implicit ctx: Context) = ref(sym).select(defn.Object_eq).appliedTo(Literal(Constant(null)))
+
+  private def companionSymbol(sym: Symbol)(implicit ctx: Context) = 
+    ctx.newSymbol(sym.owner, LocalOptNullChecksName.fresh(), Synthetic | Mutable, nullcheck(sym).tpe)
 }
