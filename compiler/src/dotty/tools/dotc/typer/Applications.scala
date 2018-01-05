@@ -386,7 +386,7 @@ trait Applications extends Compatibility { self: Typer with Dynamic =>
           val companion = cls.companionModule
           if (companion.isTerm) {
             val prefix = receiver.tpe.baseType(cls).normalizedPrefix
-            if (prefix.exists) selectGetter(ref(TermRef.withSym(prefix, companion.asTerm)))
+            if (prefix.exists) selectGetter(ref(TermRef(prefix, companion.asTerm)))
             else EmptyTree
           }
           else EmptyTree
@@ -549,10 +549,7 @@ trait Applications extends Compatibility { self: Typer with Dynamic =>
       val args = typedArgBuf.takeRight(n).toList
       typedArgBuf.trimEnd(n)
       val elemtpt = TypeTree(elemFormal)
-      val seqLit =
-        if (methodType.isJavaMethod) JavaSeqLiteral(args, elemtpt)
-        else SeqLiteral(args, elemtpt)
-      typedArgBuf += seqToRepeated(seqLit)
+      typedArgBuf += seqToRepeated(SeqLiteral(args, elemtpt))
     }
 
     def harmonizeArgs(args: List[TypedArg]) = harmonize(args)

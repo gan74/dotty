@@ -53,10 +53,7 @@ class PlainPrinter(_ctx: Context) extends Printer {
         case AndType(tp1, tp2) =>
           homogenize(tp1) & homogenize(tp2)
         case OrType(tp1, tp2) =>
-          if (tp1.show > tp2.show)
-            homogenize(tp1) | homogenize(tp2)
-          else
-            homogenize(tp2) | homogenize(tp1)
+          homogenize(tp1) | homogenize(tp2)
         case tp: SkolemType =>
           homogenize(tp.info)
         case tp: LazyRef =>
@@ -78,24 +75,6 @@ class PlainPrinter(_ctx: Context) extends Printer {
   }
 
   private def selfRecName(n: Int) = s"z$n"
-
-  /** Render elements alternating with `sep` string */
-  protected def toText(elems: Traversable[Showable], sep: String) =
-    Text(elems map (_ toText this), sep)
-
-  /** Render element within highest precedence */
-  protected def toTextLocal(elem: Showable): Text =
-    atPrec(DotPrec) { elem.toText(this) }
-
-  /** Render element within lowest precedence */
-  protected def toTextGlobal(elem: Showable): Text =
-    atPrec(GlobalPrec) { elem.toText(this) }
-
-  protected def toTextLocal(elems: Traversable[Showable], sep: String) =
-    atPrec(DotPrec) { toText(elems, sep) }
-
-  protected def toTextGlobal(elems: Traversable[Showable], sep: String) =
-    atPrec(GlobalPrec) { toText(elems, sep) }
 
   /** If the name of the symbol's owner should be used when you care about
    *  seeing an interesting name: in such cases this symbol is e.g. a method
@@ -176,11 +155,6 @@ class PlainPrinter(_ctx: Context) extends Printer {
           "{" ~ selfRecName(openRecs.length) ~ " => " ~ toTextGlobal(tp.parent) ~ "}"
         }
         finally openRecs = openRecs.tail
-      case TypeArgRef(prefix, clsRef, idx) =>
-        val cls = clsRef.symbol
-        val tparams = cls.typeParams
-        val paramName = if (tparams.length > idx) nameString(tparams(idx)) else "<unknown>"
-        toTextPrefix(prefix) ~ s"<parameter $paramName of " ~ toText(cls) ~ ">"
       case AndType(tp1, tp2) =>
         changePrec(AndPrec) { toText(tp1) ~ " & " ~ toText(tp2) }
       case OrType(tp1, tp2) =>
@@ -204,20 +178,20 @@ class PlainPrinter(_ctx: Context) extends Printer {
       case tp: TypeLambda =>
         changePrec(GlobalPrec) {
           "[" ~ paramsText(tp) ~ "]" ~ lambdaHash(tp) ~
-          (" => " provided !tp.resultType.isInstanceOf[MethodType]) ~
+          (Str(" => ") provided !tp.resultType.isInstanceOf[MethodType]) ~
           toTextGlobal(tp.resultType)
         }
       case AnnotatedType(tpe, annot) =>
         toTextLocal(tpe) ~ " " ~ toText(annot)
       case tp: TypeVar =>
         if (tp.isInstantiated)
-          toTextLocal(tp.instanceOpt) ~ ("^" provided ctx.settings.YprintDebug.value)
+          toTextLocal(tp.instanceOpt) ~ (Str("^") provided ctx.settings.YprintDebug.value)
         else {
           val constr = ctx.typerState.constraint
           val bounds =
             if (constr.contains(tp)) constr.fullBounds(tp.origin)(ctx.addMode(Mode.Printing))
             else TypeBounds.empty
-          if (bounds.isAlias) toText(bounds.lo) ~ ("^" provided ctx.settings.YprintDebug.value)
+          if (bounds.isAlias) toText(bounds.lo) ~ (Str("^") provided ctx.settings.YprintDebug.value)
           else if (ctx.settings.YshowVarBounds.value) "(" ~ toText(tp.origin) ~ "?" ~ toText(bounds) ~ ")"
           else toText(tp.origin)
         }
@@ -247,7 +221,7 @@ class PlainPrinter(_ctx: Context) extends Printer {
 
   /** If -uniqid is set, the unique id of symbol, after a # */
   protected def idString(sym: Symbol): String =
-    if (ctx.settings.uniqid.value) "#" + sym.id else ""
+    if (ctx.settings.uniqid.value || Printer.debugPrintUnique) "#" + sym.id else ""
 
   def nameString(sym: Symbol): String =
     simpleNameString(sym) + idString(sym) // + "<" + (if (sym.exists) sym.owner else "") + ">"
@@ -342,6 +316,8 @@ class PlainPrinter(_ctx: Context) extends Printer {
           else dclsText(trueDecls)
         tparamsText ~ " extends " ~ toTextParents(tp.parents) ~ "{" ~ selfText ~ declsText ~
           "} at " ~ preText
+      case mt: MethodType =>
+        toTextGlobal(mt)
       case tp =>
         ": " ~ toTextGlobal(tp)
     }
@@ -503,7 +479,7 @@ class PlainPrinter(_ctx: Context) extends Printer {
           else
             Text()
 
-        nodeName ~ "(" ~ elems ~ tpSuffix ~ ")" ~ (node.pos.toString provided ctx.settings.YprintPos.value)
+        nodeName ~ "(" ~ elems ~ tpSuffix ~ ")" ~ (Str(node.pos.toString) provided ctx.settings.YprintPos.value)
       case _ =>
         tree.fallbackToText(this)
     }
@@ -549,6 +525,7 @@ class PlainPrinter(_ctx: Context) extends Printer {
   def plain = this
 
   protected def keywordStr(text: String): String = coloredStr(text, SyntaxHighlighting.KeywordColor)
+  protected def keywordText(text: String): Text = coloredStr(text, SyntaxHighlighting.KeywordColor)
   protected def valDefText(text: Text): Text = coloredText(text, SyntaxHighlighting.ValDefColor)
   protected def typeText(text: Text): Text = coloredText(text, SyntaxHighlighting.TypeColor)
   protected def literalText(text: Text): Text = coloredText(text, SyntaxHighlighting.LiteralColor)

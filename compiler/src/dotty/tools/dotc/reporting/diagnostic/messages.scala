@@ -20,7 +20,6 @@ import printing.Formatting
 import ErrorMessageID._
 import Denotations.SingleDenotation
 import dotty.tools.dotc.ast.Trees
-import dotty.tools.dotc.ast.untpd.Modifiers
 import dotty.tools.dotc.config.ScalaVersion
 import dotty.tools.dotc.core.Flags.{FlagSet, Mutable}
 import dotty.tools.dotc.core.SymDenotations.SymDenotation
@@ -357,12 +356,7 @@ object messages {
         )
       }
 
-      val siteType = site match {
-        case tp: NamedType => tp.info
-        case tp => tp
-      }
-
-      ex"$selected `$name` is not a member of $siteType$closeMember"
+      ex"$selected `$name` is not a member of ${site.widen}$closeMember"
     }
 
     val explanation = ""
@@ -456,6 +450,22 @@ object messages {
            |implicit class ${cdef.name}...
            |
            |""" + implicitClassRestrictionsText
+  }
+
+  case class ImplicitClassPrimaryConstructorArity()(implicit ctx: Context)
+  extends Message(ImplicitClassPrimaryConstructorArityID){
+    val kind = "Syntax"
+    val msg = "Implicit classes must accept exactly one primary constructor parameter"
+    val explanation = {
+      val example = "implicit class RichDate(date: java.util.Date)"
+      hl"""Implicit classes may only take one non-implicit argument in their constructor. For example:
+          |
+          | $example
+          |
+          |While it’s possible to create an implicit class with more than one non-implicit argument,
+          |such classes aren’t used during implicit lookup.
+          |""" + implicitClassRestrictionsText
+    }
   }
 
   case class ObjectMayNotHaveSelfType(mdef: untpd.ModuleDef)(implicit ctx: Context)
@@ -734,7 +744,7 @@ object messages {
     val msg =
       hl"""|${NoColor(msgPrefix)} type arguments for $prettyName$expectedArgString
            |expected: $expectedArgString
-           |actual:   $actualArgString""".stripMargin
+           |actual:   ${NoColor(actualArgString)}""".stripMargin
 
     val explanation = {
       val tooManyTypeParams =
@@ -1423,11 +1433,11 @@ object messages {
     val msg = hl"$tpe does not take type parameters"
 
     private val ps =
-      if (params.size == 1) hl"a type parameter ${params.head}"
-      else hl"type parameters ${params.map(_.show).mkString(", ")}"
+      if (params.size == 1) s"a type parameter ${params.head}"
+      else s"type parameters ${params.map(_.show).mkString(", ")}"
 
     val explanation =
-      i"""You specified $ps for ${hl"$tpe"}, which is not
+      i"""You specified ${NoColor(ps)} for ${hl"$tpe"}, which is not
          |declared to take any.
          |"""
   }
@@ -1966,6 +1976,26 @@ object messages {
           |creates a "cycle" where a not yet defined class A extends itself which makes
           |impossible to instantiate an object of this class"""
     }
+  }
+
+  case class BadSymbolicReference(denot: SymDenotation)(implicit ctx: Context) extends Message(BadSymbolicReferenceID) {
+    val kind = "Reference"
+
+    val msg = {
+      val denotationOwner = denot.owner
+      val denotationName = ctx.fresh.setSetting(ctx.settings.YdebugNames, true).nameString(denot.name)
+      val file = denot.symbol.associatedFile
+      val (location, src) =
+        if (file != null) (s" in $file", file.toString)
+        else ("", "the signature")
+
+      hl"""Bad symbolic reference. A signature$location
+          |refers to $denotationName in ${denotationOwner.showKind} ${denotationOwner.showFullName} which is not available.
+          |It may be completely missing from the current classpath, or the version on
+          |the classpath might be incompatible with the version used when compiling $src."""
+    }
+
+    val explanation = ""
   }
 
   case class UnableToExtendSealedClass(pclazz: Symbol)(implicit ctx: Context) extends Message(UnableToExtendSealedClassID) {

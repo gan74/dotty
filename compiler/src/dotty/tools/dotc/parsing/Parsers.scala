@@ -857,6 +857,7 @@ object Parsers {
     /** SimpleType       ::=  SimpleType TypeArgs
      *                     |  SimpleType `#' id
      *                     |  StableId
+     *                     |  [‘-’ | ‘+’ | ‘~’ | ‘!’] StableId
      *                     |  Path `.' type
      *                     |  `(' ArgTypes `)'
      *                     |  `_' TypeBounds
@@ -875,6 +876,8 @@ object Parsers {
         val start = in.skipToken()
         typeBounds().withPos(Position(start, in.lastOffset, start))
       }
+      else if (isIdent && nme.raw.isUnary(in.name))
+        atPos(in.offset) { PrefixOp(typeIdent(), path(thisOK = true)) }
       else path(thisOK = false, handleSingletonType) match {
         case r @ SingletonTypeTree(_) => r
         case r => convertToTypeId(r)
@@ -1181,7 +1184,8 @@ object Parsers {
         t
     }
 
-    def ascription(t: Tree, location: Location.Value) = atPos(startOffset(t), in.skipToken()) {
+    def ascription(t: Tree, location: Location.Value) = atPos(startOffset(t)) {
+      in.skipToken()
       in.token match {
         case USCORE =>
           val uscoreStart = in.skipToken()
@@ -1281,6 +1285,9 @@ object Parsers {
 
     /** SimpleExpr    ::= new Template
      *                 |  BlockExpr
+     *                 |  ‘'{’ BlockExprContents ‘}’
+     *                 |  ‘'(’ ExprsInParens ‘)’
+     *                 |  ‘'[’ Type ‘]’
      *                 |  SimpleExpr1 [`_']
      *  SimpleExpr1   ::= literal
      *                 |  xmlLiteral
@@ -1309,6 +1316,15 @@ object Parsers {
         case LBRACE =>
           canApply = false
           blockExpr()
+        case QPAREN =>
+          in.token = LPAREN
+          atPos(in.offset)(Quote(simpleExpr()))
+        case QBRACE =>
+          in.token = LBRACE
+          atPos(in.offset)(Quote(simpleExpr()))
+        case QBRACKET =>
+          in.token = LBRACKET
+          atPos(in.offset)(Quote(inBrackets(typ())))
         case NEW =>
           canApply = false
           val start = in.skipToken()
@@ -1451,7 +1467,8 @@ object Parsers {
       }
       else fn
 
-    /** BlockExpr ::= `{' (CaseClauses | Block) `}'
+    /** BlockExpr         ::= `{' BlockExprContents `}'
+     *  BlockExprContents ::= CaseClauses | Block
      */
     def blockExpr(): Tree = atPos(in.offset) {
       inDefScopeBraces {
@@ -1897,15 +1914,10 @@ object Parsers {
         }
         atPos(start, nameStart) {
           val name = ident()
-          val tpt =
-            if (ctx.settings.YmethodInfer.value && owner.isTermName && in.token != COLON) {
-              TypeTree()  // XX-METHOD-INFER
-            } else {
-              accept(COLON)
-              if (in.token == ARROW && owner.isTypeName && !(mods is Local))
-                syntaxError(VarValParametersMayNotBeCallByName(name, mods is Mutable))
-              paramType()
-            }
+          accept(COLON)
+          if (in.token == ARROW && owner.isTypeName && !(mods is Local))
+            syntaxError(VarValParametersMayNotBeCallByName(name, mods is Mutable))
+          val tpt = paramType()
           val default =
             if (in.token == EQUALS) { in.nextToken(); expr() }
             else EmptyTree
@@ -2072,8 +2084,6 @@ object Parsers {
           PatDef(mods, lhs, tpt, rhs)
       }
     }
-
-
 
     private def checkVarArgsRules(vparamss: List[List[untpd.ValDef]]): List[untpd.ValDef] = {
       def isVarArgs(tpt: Trees.Tree[Untyped]): Boolean = tpt match {
@@ -2303,6 +2313,11 @@ object Parsers {
     def enumCase(start: Offset, mods: Modifiers): DefTree = {
       val mods1 = mods.withAddedMod(atPos(in.offset)(Mod.EnumCase())) | Case
       accept(CASE)
+
+      in.adjustSepRegions(ARROW)
+        // Scanner thinks it is in a pattern match after seeing the `case`.
+        // We need to get it out of that mode by telling it we are past the `=>`
+
       atPos(start, nameStart) {
         val id = termIdent()
         if (in.token == LBRACKET || in.token == LPAREN)

@@ -349,7 +349,16 @@ class Namer { typer: Typer =>
     }
     val existing = pkgOwner.info.decls.lookup(pid.name)
 
-    if ((existing is Package) && (pkgOwner eq existing.owner)) existing
+    if ((existing is Package) && (pkgOwner eq existing.owner)) {
+      existing.moduleClass.denot match {
+        case d: PackageClassDenotation =>
+          // Remove existing members coming from a previous compilation of this file,
+          // they are obsolete.
+          d.unlinkFromFile(ctx.source.file)
+        case _ =>
+      }
+      existing
+    }
     else {
       /** If there's already an existing type, then the package is a dup of this type */
       val existingType = pkgOwner.info.decls.lookup(pid.name.toTypeName)
@@ -374,15 +383,6 @@ class Namer { typer: Typer =>
   def expanded(tree: Tree)(implicit ctx: Context): Tree = tree match {
     case ddef: DefTree => ddef.attachmentOrElse(ExpandedTree, ddef)
     case _ => tree
-  }
-
-  /** A new context that summarizes an import statement */
-  def importContext(imp: Import, sym: Symbol)(implicit ctx: Context) = {
-    val impNameOpt = imp.expr match {
-      case ref: RefTree => Some(ref.name.asTermName)
-      case _            => None
-    }
-    ctx.fresh.setImportInfo(new ImportInfo(implicit ctx => sym, imp.selectors, impNameOpt))
   }
 
   /** A new context for the interior of a class */
@@ -432,7 +432,7 @@ class Namer { typer: Typer =>
         setDocstring(pkg, stat)
         ctx
       case imp: Import =>
-        importContext(imp, createSymbol(imp))
+        ctx.importContext(imp, createSymbol(imp))
       case mdef: DefTree =>
         val sym = enterSymbol(createSymbol(mdef))
         setDocstring(sym, origStat)
@@ -754,8 +754,11 @@ class Namer { typer: Typer =>
           else levels(c.outer) + 1
         println(s"!!!completing ${denot.symbol.showLocated} in buried typerState, gap = ${levels(ctx)}")
       }
-      assert(ctx.runId == creationContext.runId, "completing $denot in wrong run ${ctx.runId}, was created in ${creationContext.runId}")
-      completeInCreationContext(denot)
+      if (ctx.runId > creationContext.runId) {
+        assert(ctx.mode.is(Mode.Interactive), s"completing $denot in wrong run ${ctx.runId}, was created in ${creationContext.runId}")
+        denot.info = UnspecifiedErrorType
+      }
+      else completeInCreationContext(denot)
     }
 
     private def addInlineInfo(denot: SymDenotation) = original match {
@@ -1103,7 +1106,7 @@ class Namer { typer: Typer =>
         mdef match {
           case mdef: DefDef if mdef.name == nme.ANON_FUN =>
             val hygienicType = avoid(rhsType, paramss.flatten)
-            if (!(hygienicType <:< tpt.tpe))
+            if (!hygienicType.isValueType || !(hygienicType <:< tpt.tpe))
               ctx.error(i"return type ${tpt.tpe} of lambda cannot be made hygienic;\n" +
                 i"it is not a supertype of the hygienic type $hygienicType", mdef.pos)
             //println(i"lifting $rhsType over $paramss -> $hygienicType = ${tpt.tpe}")
@@ -1195,12 +1198,12 @@ class Namer { typer: Typer =>
     }
 
     // Here we pay the price for the cavalier setting info to TypeBounds.empty above.
-    // We need to compensate by invalidating caches in references that might
+    // We need to compensate by reloading the denotation of references that might
     // still contain the TypeBounds.empty. If we do not do this, stdlib factories
     // fail with a bounds error in PostTyper.
     def ensureUpToDate(tp: Type, outdated: Type) = tp match {
       case tref: TypeRef if tref.info == outdated && sym.info != outdated =>
-        tref.uncheckedSetSym(null)
+        tref.recomputeDenot()
       case _ =>
     }
     ensureUpToDate(sym.typeRef, dummyInfo)

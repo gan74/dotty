@@ -267,8 +267,8 @@ trait SpaceLogic {
         else
           // `(_, _, _) - (Some, None, _)` becomes `(None, _, _) | (_, Some, _) | (_, _, Empty)`
           Or(ss1.zip(ss2).map((minus _).tupled).zip(0 to ss2.length - 1).map {
-              case (ri, i) => Prod(tp1, fun1, sym1, ss1.updated(i, ri), full)
-            })
+            case (ri, i) => Prod(tp1, fun1, sym1, ss1.updated(i, ri), full)
+          })
 
     }
 
@@ -375,7 +375,7 @@ class SpaceEngine(implicit ctx: Context) extends SpaceLogic {
   }
 
   /* Whether the extractor is irrefutable */
-  def irrefutable(unapp: tpd.Tree): Boolean = {
+  def irrefutable(unapp: Tree): Boolean = {
     // TODO: optionless patmat
     unapp.tpe.widen.finalResultType.isRef(scalaSomeClass) ||
       (unapp.symbol.is(Synthetic) && unapp.symbol.owner.linkedClass.is(Case)) ||
@@ -557,11 +557,11 @@ class SpaceEngine(implicit ctx: Context) extends SpaceLogic {
   def refine(parent: Type, child: Symbol): Type = {
     if (child.isTerm && child.is(Case, butNot = Module)) return child.termRef // enum vals always match
 
-    val childTp  = if (child.isTerm) child.termRef else child.typeRef
+    val childTp = if (child.isTerm) child.termRef else child.typeRef
 
     val resTp = instantiate(childTp, parent)(ctx.fresh.setNewTyperState())
 
-    if (!resTp.exists)  {
+    if (!resTp.exists || !inhabited(resTp)) {
       debug.println(s"[refine] unqualified child ousted: ${childTp.show} !< ${parent.show}")
       NoType
     }
@@ -569,6 +569,25 @@ class SpaceEngine(implicit ctx: Context) extends SpaceLogic {
       debug.println(s"$child instantiated ------> $resTp")
       resTp.dealias
     }
+  }
+
+  /** Can this type be inhabited by a value?
+   *
+   *  Intersection between singleton types and other types is always empty
+   *  the singleton type is not a subtype of the other type.
+   *  See patmat/i3573.scala for an example.
+   */
+  def inhabited(tpe: Type)(implicit ctx: Context): Boolean = {
+    val emptySingletonIntersection = new ExistsAccumulator({
+      case AndType(s: SingletonType, t) =>
+        !(s <:< t)
+      case AndType(t, s: SingletonType) =>
+        !(s <:< t)
+      case x =>
+        false
+    })
+
+    !emptySingletonIntersection(false, tpe)
   }
 
   /** Instantiate type `tp1` to be a subtype of `tp2`
@@ -708,6 +727,38 @@ class SpaceEngine(implicit ctx: Context) extends SpaceLogic {
     else text
   }
 
+  /** Whether the counterexample is satisfiable. The space is flattened and non-empty. */
+  def satisfiable(sp: Space): Boolean = {
+    def impossible: Nothing = throw new AssertionError("`satisfiable` only accepts flattened space.")
+
+    def genConstraint(space: Space): List[(Type, Type)] = space match {
+      case Prod(tp, unappTp, unappSym, ss, _) =>
+        val tps = signature(unappTp, unappSym, ss.length)
+        ss.zip(tps).flatMap {
+          case (sp : Prod, tp) => sp.tp -> tp :: genConstraint(sp)
+          case (Typ(tp1, _), tp2) => tp1 -> tp2 :: Nil
+          case _ => impossible
+        }
+      case Typ(_, _) => Nil
+      case _ => impossible
+    }
+
+    def checkConstraint(constrs: List[(Type, Type)])(implicit ctx: Context): Boolean = {
+      val tvarMap = collection.mutable.Map.empty[Symbol, TypeVar]
+      val typeParamMap = new TypeMap() {
+        override def apply(tp: Type): Type = tp match {
+          case tref: TypeRef if tref.symbol.is(TypeParam) =>
+            tvarMap.getOrElseUpdate(tref.symbol, newTypeVar(tref.underlying.bounds))
+          case tp => mapOver(tp)
+        }
+      }
+
+      constrs.forall { case (tp1, tp2) => typeParamMap(tp1) <:< typeParamMap(tp2) }
+    }
+
+    checkConstraint(genConstraint(sp))(ctx.fresh.setNewTyperState())
+  }
+
   /** Display spaces */
   def show(s: Space): String = {
     def params(tp: Type): List[Type] = tp.classSymbol.primaryConstructor.info.firstParamTypes
@@ -755,24 +806,35 @@ class SpaceEngine(implicit ctx: Context) extends SpaceLogic {
   def checkable(tree: Match): Boolean = {
     // Possible to check everything, but be compatible with scalac by default
     def isCheckable(tp: Type): Boolean =
-        !tp.hasAnnotation(defn.UncheckedAnnot) && (
-          ctx.settings.YcheckAllPatmat.value ||
-          tp.typeSymbol.is(Sealed) ||
-          tp.isInstanceOf[OrType] ||
-          (tp.isInstanceOf[AndType] && {
-            val and = tp.asInstanceOf[AndType]
-            isCheckable(and.tp1) || isCheckable(and.tp2)
-          }) ||
-          tp.isRef(defn.BooleanClass) ||
-          tp.typeSymbol.is(Enum) ||
-          canDecompose(tp) ||
-          (defn.isTupleType(tp) && tp.dealias.argInfos.exists(isCheckable(_)))
-        )
+      !tp.hasAnnotation(defn.UncheckedAnnot) && {
+        val tpw = tp.widen.dealias
+        ctx.settings.YcheckAllPatmat.value ||
+        tpw.typeSymbol.is(Sealed) ||
+        tpw.isInstanceOf[OrType] ||
+        (tpw.isInstanceOf[AndType] && {
+          val and = tpw.asInstanceOf[AndType]
+          isCheckable(and.tp1) || isCheckable(and.tp2)
+        }) ||
+        tpw.isRef(defn.BooleanClass) ||
+        tpw.typeSymbol.is(Enum) ||
+        canDecompose(tpw) ||
+        (defn.isTupleType(tpw) && tpw.argInfos.exists(isCheckable(_)))
+      }
 
     val Match(sel, cases) = tree
-    val res = isCheckable(sel.tpe.widen.dealiasKeepAnnots)
+    val res = isCheckable(sel.tpe)
     debug.println(s"checkable: ${sel.show} = $res")
     res
+  }
+
+  /** Whehter counter-examples should be further checked? True for GADTs. */
+  def shouldCheckExamples(tp: Type): Boolean = {
+    new TypeAccumulator[Boolean] {
+      override def apply(b: Boolean, tp: Type): Boolean = tp match {
+        case tref: TypeRef if tref.symbol.is(TypeParam) && variance != 1 => true
+        case tp => b || foldOver(b, tp)
+      }
+    }.apply(false, tp)
   }
 
   def checkExhaustivity(_match: Match): Unit = {
@@ -785,10 +847,15 @@ class SpaceEngine(implicit ctx: Context) extends SpaceLogic {
       debug.println(s"${x.pat.show} ====> ${show(space)}")
       space
     }).reduce((a, b) => Or(List(a, b)))
-    val uncovered = simplify(minus(Typ(selTyp, true), patternSpace), aggressive = true)
 
-    if (uncovered != Empty)
-      ctx.warning(PatternMatchExhaustivity(show(uncovered)), sel.pos)
+    val checkGADTSAT = shouldCheckExamples(selTyp)
+
+    val uncovered =
+      flatten(simplify(minus(Typ(selTyp, true), patternSpace), aggressive = true))
+        .filter(s => s != Empty && (!checkGADTSAT || satisfiable(s)))
+
+    if (uncovered.nonEmpty)
+      ctx.warning(PatternMatchExhaustivity(show(Or(uncovered))), sel.pos)
   }
 
   def checkRedundancy(_match: Match): Unit = {

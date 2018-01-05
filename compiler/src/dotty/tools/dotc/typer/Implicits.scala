@@ -9,6 +9,7 @@ import util.Stats.{track, record, monitored}
 import printing.{Showable, Printer}
 import printing.Texts._
 import Contexts._
+import Run.RunInfo
 import Types._
 import Flags._
 import TypeErasure.{erasure, hasStableErasure}
@@ -45,11 +46,20 @@ object Implicits {
    */
   val DelayedImplicit = new Property.Key[TermRef]
 
+  /** An implicit definition `implicitRef` that is visible under a different name, `alias`.
+   *  Gets generated if an implicit ref is imported via a renaming import.
+   */
+  class RenamedImplicitRef(val underlyingRef: TermRef, val alias: TermName) extends ImplicitRef {
+    def implicitName(implicit ctx: Context): TermName = alias
+  }
+
   /** An eligible implicit candidate, consisting of an implicit reference and a nesting level */
-  case class Candidate(ref: TermRef, level: Int)
+  case class Candidate(implicitRef: ImplicitRef, level: Int) {
+    def ref: TermRef = implicitRef.underlyingRef
+  }
 
   /** A common base class of contextual implicits and of-type implicits which
-   *  represents a set of implicit references.
+   *  represents a set of references to implicit definitions.
    */
   abstract class ImplicitRefs(initctx: Context) {
     implicit val ctx: Context =
@@ -59,7 +69,7 @@ object Implicits {
     def level: Int = 0
 
     /** The implicit references */
-    def refs: List[TermRef]
+    def refs: List[ImplicitRef]
 
     /** Return those references in `refs` that are compatible with type `pt`. */
     protected def filterMatching(pt: Type)(implicit ctx: Context): List[Candidate] = track("filterMatching") {
@@ -138,7 +148,7 @@ object Implicits {
       else {
         val nestedCtx = ctx.fresh.addMode(Mode.TypevarsMissContext)
         refs
-          .filter(ref => nestedCtx.typerState.test(refMatches(ref)(nestedCtx)))
+          .filter(ref => nestedCtx.typerState.test(refMatches(ref.underlyingRef)(nestedCtx)))
           .map(Candidate(_, level))
       }
     }
@@ -150,7 +160,7 @@ object Implicits {
    */
   class OfTypeImplicits(tp: Type, val companionRefs: TermRefSet)(initctx: Context) extends ImplicitRefs(initctx) {
     assert(initctx.typer != null)
-    lazy val refs: List[TermRef] = {
+    lazy val refs: List[ImplicitRef] = {
       val buf = new mutable.ListBuffer[TermRef]
       for (companion <- companionRefs) buf ++= companion.implicitMembers
       buf.toList
@@ -176,7 +186,7 @@ object Implicits {
    *                   name, b, whereas the name of the symbol is the original name, a.
    *  @param outerCtx  the next outer context that makes visible further implicits
    */
-  class ContextualImplicits(val refs: List[TermRef], val outerImplicits: ContextualImplicits)(initctx: Context) extends ImplicitRefs(initctx) {
+  class ContextualImplicits(val refs: List[ImplicitRef], val outerImplicits: ContextualImplicits)(initctx: Context) extends ImplicitRefs(initctx) {
     private val eligibleCache = new mutable.AnyRefMap[Type, List[Candidate]]
 
     /** The level increases if current context has a different owner or scope than
@@ -188,7 +198,7 @@ object Implicits {
       else if (ctx.scala2Mode ||
                (ctx.owner eq outerImplicits.ctx.owner) &&
                (ctx.scope eq outerImplicits.ctx.scope) &&
-               !refs.head.name.is(LazyImplicitName)) outerImplicits.level
+               !refs.head.implicitName.is(LazyImplicitName)) outerImplicits.level
       else outerImplicits.level + 1
 
     /** Is this the outermost implicits? This is the case if it either the implicits
@@ -231,8 +241,8 @@ object Implicits {
       val ownEligible = filterMatching(tp)
       if (isOuterMost) ownEligible
       else ownEligible ::: {
-        val shadowed = ownEligible.map(_.ref.name).toSet
-        outerImplicits.eligible(tp).filterNot(cand => shadowed.contains(cand.ref.name))
+        val shadowed = ownEligible.map(_.ref.implicitName).toSet
+        outerImplicits.eligible(tp).filterNot(cand => shadowed.contains(cand.ref.implicitName))
       }
     }
 
@@ -341,8 +351,14 @@ object Implicits {
                          shadowing: Type,
                          val expectedType: Type,
                          val argument: Tree) extends SearchFailureType {
+    /** same as err.refStr but always prints owner even if it is a term */
+    def show(ref: Type)(implicit ctx: Context) = ref match {
+      case ref: NamedType if ref.symbol.maybeOwner.isTerm =>
+        i"${ref.symbol} in ${ref.symbol.owner}"
+      case _ => err.refStr(ref)
+    }
     def explanation(implicit ctx: Context): String =
-      em"${err.refStr(ref)} does $qualify but is shadowed by ${err.refStr(shadowing)}"
+      em"${show(ref)} does $qualify but it is shadowed by ${show(shadowing)}"
   }
 
   class DivergingImplicit(ref: TermRef,
@@ -393,7 +409,7 @@ trait ImplicitRunInfo { self: RunInfo =>
         case tp: AppliedType if !tp.tycon.typeSymbol.isClass =>
           def applyArg(arg: Type) = arg match {
             case TypeBounds(lo, hi) => AndType.make(lo, hi)
-            case _: WildcardType => defn.AnyType
+            case WildcardType(TypeBounds(lo, hi)) => AndType.make(lo, hi)
             case _ => arg
           }
           (apply(tp.tycon) /: tp.args)((tc, arg) => AndType.make(tc, applyArg(arg)))
@@ -432,7 +448,7 @@ trait ImplicitRunInfo { self: RunInfo =>
               def addRef(companion: TermRef): Unit = {
                 val compSym = companion.symbol
                 if (compSym is Package)
-                  addRef(TermRef(companion, nme.PACKAGE))
+                  addRef(companion.select(nme.PACKAGE))
                 else if (compSym.exists)
                   comps += companion.asSeenFrom(pre, compSym.owner).asInstanceOf[TermRef]
               }
@@ -619,7 +635,9 @@ trait Implicits { self: Typer =>
           case _ => false
         }
         if (lazyImplicit.exists && refersToLazyImplicit)
-          Block(ValDef(lazyImplicit.asTerm, arg).withPos(pos) :: Nil, ref(lazyImplicit))
+          Block(
+            ValDef(lazyImplicit.asTerm, arg.changeOwner(ctx.owner, lazyImplicit)).withPos(pos) :: Nil,
+            ref(lazyImplicit))
         else
           arg
       case fail @ SearchFailure(tree) =>
@@ -646,17 +664,24 @@ trait Implicits { self: Typer =>
       case arg: Trees.SearchFailureIdent[_] =>
         shortForm
       case _ =>
-        i"""$headline.
-           |I found:
-           |
-           |    ${arg.show.replace("\n", "\n    ")}
-           |
-           |But ${arg.tpe.asInstanceOf[SearchFailureType].explanation}."""
+        arg.tpe match {
+          case tpe: ShadowedImplicit =>
+            i"""$headline;
+               |${tpe.explanation}."""
+          case tpe: SearchFailureType =>
+            i"""$headline.
+              |I found:
+              |
+              |    ${arg.show.replace("\n", "\n    ")}
+              |
+              |But ${tpe.explanation}."""
+        }
     }
+    def location(preposition: String) = if (where.isEmpty) "" else s" $preposition $where"
     arg.tpe match {
       case ambi: AmbiguousImplicits =>
-        msg(s"ambiguous implicit arguments: ${ambi.explanation} of $where")(
-            s"ambiguous implicit arguments of type ${pt.show} found for $where")
+        msg(s"ambiguous implicit arguments: ${ambi.explanation}${location("of")}")(
+            s"ambiguous implicit arguments of type ${pt.show} found${location("for")}")
       case _ =>
         val userDefined =
           for {
@@ -669,7 +694,7 @@ trait Implicits { self: Typer =>
               pt.typeSymbol.typeParams.map(_.name.unexpandedName.toString),
               pt.argInfos)
           }
-        msg(userDefined.getOrElse(em"no implicit argument of type $pt was found for $where"))()
+        msg(userDefined.getOrElse(em"no implicit argument of type $pt was found${location("for")}"))()
     }
   }
 
@@ -726,7 +751,7 @@ trait Implicits { self: Typer =>
    *  !!! todo: catch potential cycles
    */
   def inferImplicit(pt: Type, argument: Tree, pos: Position)(implicit ctx: Context): SearchResult = track("inferImplicit") {
-    assert(!ctx.isAfterTyper,
+    assert(ctx.phase.allowsImplicitSearch,
       if (argument.isEmpty) i"missing implicit parameter of type $pt after typer"
       else i"type error: ${argument.tpe} does not conform to $pt${err.whyNoMatchStr(argument.tpe, pt)}")
     trace(s"search implicit ${pt.show}, arg = ${argument.show}: ${argument.tpe.show}", implicits, show = true) {
@@ -806,7 +831,7 @@ trait Implicits { self: Typer =>
             pt)
         val generated1 = adapt(generated, pt)
         lazy val shadowing =
-          typed(untpd.Ident(ref.name) withPos pos.toSynthetic, funProto)(
+          typed(untpd.Ident(cand.implicitRef.implicitName) withPos pos.toSynthetic, funProto)(
             nestedContext().addMode(Mode.ImplicitShadowing).setExploreTyperState())
         def refSameAs(shadowing: Tree): Boolean =
           ref.symbol == closureBody(shadowing).symbol || {
@@ -1020,7 +1045,15 @@ trait Implicits { self: Typer =>
       searchImplicits(eligible, contextual).recoverWith {
         failure => failure.reason match {
           case _: AmbiguousImplicits => failure
-          case _ => if (contextual) bestImplicit(contextual = false) else failure
+          case reason =>
+            if (contextual)
+              bestImplicit(contextual = false).recoverWith {
+                failure2 => reason match {
+                  case (_: DivergingImplicit) | (_: ShadowedImplicit) => failure
+                  case _ => failure2
+                }
+              }
+            else failure
         }
       }
     }
@@ -1114,7 +1147,7 @@ class TermRefSet(implicit ctx: Context) extends mutable.Traversable[TermRef] {
   override def foreach[U](f: TermRef => U): Unit =
     for (sym <- elems.keysIterator)
       for (pre <- elems(sym))
-        f(TermRef.withSym(pre, sym))
+        f(TermRef(pre, sym))
 }
 
 @sharable object EmptyTermRefSet extends TermRefSet()(NoContext)

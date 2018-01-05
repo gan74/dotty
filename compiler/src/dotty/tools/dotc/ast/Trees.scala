@@ -85,13 +85,8 @@ object Trees {
      *  which implements copy-on-write. Another use-case is in method interpolateAndAdapt in Typer,
      *  where we overwrite with a simplified version of the type itself.
      */
-    private[dotc] def overwriteType(tpe: T) = {
-      if (this.isInstanceOf[Template[_]])
-        tpe match {
-          case tpe: TermRef => assert(tpe.hasFixedSym , s"$this <--- $tpe")
-        }
+    private[dotc] def overwriteType(tpe: T) =
       myTpe = tpe
-    }
 
     /** The type of the tree. In case of an untyped tree,
      *   an UnAssignedTypeException is thrown. (Overridden by empty trees)
@@ -118,7 +113,7 @@ object Trees {
      */
     def withType(tpe: Type)(implicit ctx: Context): ThisTree[Type] = {
       if (tpe.isInstanceOf[ErrorType])
-        assert(ctx.mode.is(Mode.Interactive) || ctx.reporter.errorsReported)
+        assert(!Config.checkUnreportedErrors || ctx.reporter.errorsReported)
       else if (Config.checkTreesConsistent)
         checkChildrenTyped(productIterator)
       withTypeUnchecked(tpe)

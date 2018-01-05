@@ -10,7 +10,6 @@ import java.lang.AssertionError
 import Decorators._
 import Symbols._
 import Contexts._
-import Designators._
 import SymDenotations._
 import printing.Texts._
 import printing.Printer
@@ -131,8 +130,8 @@ trait Symbols { this: Context =>
     newClassSymbol(owner, name, flags, completer, privateWithin, coord, assocFile)
   }
 
-  def newRefinedClassSymbol = newCompleteClassSymbol(
-    ctx.owner, tpnme.REFINE_CLASS, NonMember, parents = Nil)
+  def newRefinedClassSymbol(coord: Coord = NoCoord) =
+    newCompleteClassSymbol(ctx.owner, tpnme.REFINE_CLASS, NonMember, parents = Nil, coord = coord)
 
   /** Create a module symbol with associated module class
    *  from its non-info fields and a function producing the info
@@ -158,7 +157,7 @@ trait Symbols { this: Context =>
         infoFn(module, modcls), privateWithin)
     val mdenot = SymDenotation(
         module, owner, name, modFlags | ModuleValCreationFlags,
-        if (cdenot.isCompleted) TypeRef.withSym(owner.thisType, modcls, modclsName)
+        if (cdenot.isCompleted) TypeRef(owner.thisType, modcls)
         else new ModuleCompleter(modcls))
     module.denot = mdenot
     modcls.denot = cdenot
@@ -183,7 +182,7 @@ trait Symbols { this: Context =>
     newModuleSymbol(
         owner, name, modFlags, clsFlags,
         (module, modcls) => ClassInfo(
-          owner.thisType, modcls, parents, decls, TermRef.withSym(owner.thisType, module, name)),
+          owner.thisType, modcls, parents, decls, TermRef(owner.thisType, module)),
         privateWithin, coord, assocFile)
 
   val companionMethodFlags = Flags.Synthetic | Flags.Private | Flags.Method
@@ -289,9 +288,9 @@ trait Symbols { this: Context =>
     val tparamBuf = new mutable.ListBuffer[TypeSymbol]
     val trefBuf = new mutable.ListBuffer[TypeRef]
     for (name <- names) {
-      val tparam = newNakedSymbol[TypeName](NoCoord)
+      val tparam = newNakedSymbol[TypeName](owner.coord)
       tparamBuf += tparam
-      trefBuf += TypeRef.withSym(owner.thisType, tparam, name)
+      trefBuf += TypeRef(owner.thisType, tparam)
     }
     val tparams = tparamBuf.toList
     val bounds = boundsFn(trefBuf.toList)
@@ -303,7 +302,7 @@ trait Symbols { this: Context =>
   /** Create a new skolem symbol. This is not the same as SkolemType, even though the
    *  motivation (create a singleton referencing to a type) is similar.
    */
-  def newSkolem(tp: Type) = newSymbol(defn.RootClass, nme.SKOLEM, SyntheticArtifact | Permanent, tp)
+  def newSkolem(tp: Type) = newSymbol(defn.RootClass, nme.SKOLEM, SyntheticArtifact | NonMember | Permanent, tp)
 
   def newErrorSymbol(owner: Symbol, name: Name, msg: => Message) = {
     val errType = ErrorType(msg)
@@ -384,6 +383,9 @@ trait Symbols { this: Context =>
     base.staticRef(path.toTermName).requiredSymbol(_ is Module).asTerm
 
   def requiredModuleRef(path: PreName): TermRef = requiredModule(path).termRef
+
+  def requiredMethod(path: PreName): TermSymbol =
+    base.staticRef(path.toTermName).requiredSymbol(_ is Method).asTerm
 }
 
 object Symbols {
@@ -432,45 +434,48 @@ object Symbols {
       newd
     }
 
-    /** The initial denotation of this symbol, without going through `current` */
-    final def initialDenot(implicit ctx: Context): SymDenotation =
+    /** The original denotation of this symbol, without forcing anything */
+    final def originDenotation: SymDenotation =
       lastDenot.initial
+
+    /** The last known denotation of this symbol, without going through `current` */
+    final def lastKnownDenotation: SymDenotation =
+      lastDenot
 
     private[core] def defRunId: RunId =
       if (lastDenot == null) NoRunId else lastDenot.validFor.runId
 
     /** Does this symbol come from a currently compiled source file? */
-    final def isDefinedInCurrentRun(implicit ctx: Context): Boolean = {
-      pos.exists && defRunId == ctx.runId
-    }
+    final def isDefinedInCurrentRun(implicit ctx: Context): Boolean =
+      pos.exists && defRunId == ctx.runId && {
+        val file = associatedFile
+        file != null && ctx.runInfo.files.contains(file)
+      }
 
+    /** Is symbol valid in current run? */
     final def isValidInCurrentRun(implicit ctx: Context): Boolean =
-      lastDenot.validFor.runId == ctx.runId || ctx.stillValid(lastDenot)
+      (lastDenot.validFor.runId == ctx.runId || ctx.stillValid(lastDenot)) &&
+      (lastDenot.symbol eq this)
+        // the last condition is needed because under ctx.staleOK overwritten
+        // members keep denotations pointing to the new symbol, so the validity
+        // periods check out OK. But once a package member is overridden it is not longer
+        // valid. If the option would be removed, the check would be no longer needed.
 
-    /** Designator overrides */
-    final override def isTerm(implicit ctx: Context): Boolean =
+    final def isTerm(implicit ctx: Context): Boolean =
       (if (defRunId == ctx.runId) lastDenot else denot).isTerm
-    final override def isType(implicit ctx: Context): Boolean =
+    final def isType(implicit ctx: Context): Boolean =
       (if (defRunId == ctx.runId) lastDenot else denot).isType
-    final override def asTerm(implicit ctx: Context): TermSymbol = {
+    final def asTerm(implicit ctx: Context): TermSymbol = {
       assert(isTerm, s"asTerm called on not-a-Term $this" );
       asInstanceOf[TermSymbol]
     }
-    final override def asType(implicit ctx: Context): TypeSymbol = {
+    final def asType(implicit ctx: Context): TypeSymbol = {
       assert(isType, s"isType called on not-a-Type $this");
       asInstanceOf[TypeSymbol]
     }
 
     final def isClass: Boolean = isInstanceOf[ClassSymbol]
     final def asClass: ClassSymbol = asInstanceOf[ClassSymbol]
-
-    /** Test whether symbol is referenced symbolically. This
-     *  conservatively returns `false` if symbol does not yet have a denotation
-     */
-    final def isReferencedSymbolically(implicit ctx: Context) = {
-      val d = lastDenot
-      d != null && (d.is(NonMember) || d.isTerm && ctx.phase.symbolicRefs)
-    }
 
     /** Test whether symbol is private. This
      *  conservatively returns `false` if symbol does not yet have a denotation, or denotation
@@ -490,7 +495,7 @@ object Symbols {
 
     /** Special cased here, because it may be used on naked symbols in substituters */
     final def isStatic(implicit ctx: Context): Boolean =
-      lastDenot != null && denot.isStatic
+      lastDenot != null && lastDenot.initial.isStatic
 
     /** A unique, densely packed integer tag for each class symbol, -1
      *  for all other symbols. To save memory, this method
@@ -539,7 +544,7 @@ object Symbols {
      *  Overridden in ClassSymbol
      */
     def associatedFile(implicit ctx: Context): AbstractFile =
-      denot.topLevelClass.symbol.associatedFile
+      if (lastDenot == null) null else lastDenot.topLevelClass.symbol.associatedFile
 
     /** The class file from which this class was generated, null if not applicable. */
     final def binaryFile(implicit ctx: Context): AbstractFile = {
@@ -563,8 +568,12 @@ object Symbols {
       }
     }
 
-    /** The position of this symbol, or NoPosition is symbol was not loaded
-     *  from source.
+    /** The position of this symbol, or NoPosition if the symbol was not loaded
+     *  from source or from TASTY. This is always a zero-extent position.
+     *
+     *  NOTE: If the symbol was not loaded from the current compilation unit,
+     *  the implicit conversion `sourcePos` will return the wrong result, careful!
+     *  TODO: Consider changing this method return type to `SourcePosition`.
      */
     def pos: Position = if (coord.isPosition) coord.toPosition else NoPosition
 
@@ -648,11 +657,12 @@ object Symbols {
     denot = underlying.denot
   }
 
-  @sharable object NoSymbol extends Symbol(NoCoord, 0) {
-    denot = NoDenotation
+  @sharable val NoSymbol = new Symbol(NoCoord, 0) {
     override def associatedFile(implicit ctx: Context): AbstractFile = NoSource.file
     override def recomputeDenot(lastd: SymDenotation)(implicit ctx: Context): SymDenotation = NoDenotation
   }
+
+  NoDenotation // force it in order to set `denot` field of NoSymbol
 
   implicit class Copier[N <: Name](sym: Symbol { type ThisName = N })(implicit ctx: Context) {
     /** Copy a symbol, overriding selective fields */

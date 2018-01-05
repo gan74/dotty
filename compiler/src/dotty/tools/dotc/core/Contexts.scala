@@ -14,11 +14,12 @@ import NameOps._
 import Uniques._
 import SymDenotations._
 import Comments._
+import Run.RunInfo
 import util.Positions._
 import ast.Trees._
 import ast.untpd
 import util.{FreshNameCreator, SimpleIdentityMap, SourceFile, NoSource}
-import typer.{Implicits, ImplicitRunInfo, ImportInfo, Inliner, NamerContextOps, SearchHistory, TypeAssigner, Typer}
+import typer.{Implicits, ImportInfo, Inliner, NamerContextOps, SearchHistory, TypeAssigner, Typer}
 import Implicits.ContextualImplicits
 import config.Settings._
 import config.Config
@@ -201,7 +202,7 @@ object Contexts {
     def implicits: ContextualImplicits = {
       if (implicitsCache == null )
         implicitsCache = {
-          val implicitRefs: List[TermRef] =
+          val implicitRefs: List[ImplicitRef] =
             if (isClassDefContext)
               try owner.thisType.implicitMembers
               catch {
@@ -357,6 +358,15 @@ object Contexts {
       if (exprOwner == this.owner) this
       else if (untpd.isSuperConstrCall(stat) && this.owner.isClass) superCallContext
       else ctx.fresh.setOwner(exprOwner)
+
+    /** A new context that summarizes an import statement */
+    def importContext(imp: Import[_], sym: Symbol) = {
+      val impNameOpt = imp.expr match {
+        case ref: RefTree[_] => Some(ref.name.asTermName)
+        case _               => None
+      }
+      ctx.fresh.setImportInfo(new ImportInfo(implicit ctx => sym, imp.selectors, impNameOpt))
+    }
 
     /** The current source file; will be derived from current
      *  compilation unit.
@@ -673,11 +683,6 @@ object Contexts {
     implicit def toBase(ctx: Context): ContextBase = ctx.base
 
     // @sharable val theBase = new ContextBase // !!! DEBUG, so that we can use a minimal context for reporting even in code that normally cannot access a context
-  }
-
-  /** Info that changes on each compiler run */
-  class RunInfo(initctx: Context) extends ImplicitRunInfo with ConstraintRunInfo {
-    implicit val ctx: Context = initctx
   }
 
   class GADTMap(initBounds: SimpleIdentityMap[Symbol, TypeBounds]) extends util.DotClass {

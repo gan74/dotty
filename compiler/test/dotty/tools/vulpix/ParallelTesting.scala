@@ -151,7 +151,8 @@ trait ParallelTesting extends RunnerOrchestration { self =>
   ) extends TestSource {
 
     /** Get the files grouped by `_X` as a list of groups, files missing this
-     *  suffix will be put into the same group
+     *  suffix will be put into the same group.
+     *  Files in each group are sorted alphabetically.
      *
      *  Filters out all none source files
      */
@@ -170,7 +171,7 @@ trait ParallelTesting extends RunnerOrchestration { self =>
         .toOption
         .getOrElse("")
       }
-      .toList.sortBy(_._1).map(_._2.filter(isSourceFile))
+      .toList.sortBy(_._1).map(_._2.filter(isSourceFile).sorted)
   }
 
   /** Each `Test` takes the `testSources` and performs the compilation and assertions
@@ -1048,9 +1049,10 @@ trait ParallelTesting extends RunnerOrchestration { self =>
   }
 
   /** Separates directories from files and returns them as `(dirs, files)` */
-  private def compilationTargets(sourceDir: JFile): (List[JFile], List[JFile]) =
+  private def compilationTargets(sourceDir: JFile, blacklist: Set[String] = Set.empty): (List[JFile], List[JFile]) =
     sourceDir.listFiles.foldLeft((List.empty[JFile], List.empty[JFile])) { case ((dirs, files), f) =>
-      if (f.isDirectory) (f :: dirs, files)
+      if (blacklist(f.getName)) (dirs, files)
+      else if (f.isDirectory) (f :: dirs, files)
       else if (isSourceFile(f)) (dirs, f :: files)
       else (dirs, files)
     }
@@ -1113,13 +1115,16 @@ trait ParallelTesting extends RunnerOrchestration { self =>
    *  By default, files are compiled in alphabetical order. An optional seed
    *  can be used for randomization.
    */
-  def compileDir(f: String, flags: TestFlags, randomOrder: Option[Int] = None)(implicit testGroup: TestGroup): CompilationTest = {
+  def compileDir(f: String, flags: TestFlags, randomOrder: Option[Int] = None, recursive: Boolean = true)(implicit testGroup: TestGroup): CompilationTest = {
     val outDir = defaultOutputDir + testGroup + "/"
     val sourceDir = new JFile(f)
     checkRequirements(f, sourceDir, outDir)
 
     def flatten(f: JFile): Array[JFile] =
-      if (f.isDirectory) f.listFiles.flatMap(flatten)
+      if (f.isDirectory) {
+        val files = f.listFiles
+        if (recursive) files.flatMap(flatten) else files
+      }
       else Array(f)
 
     // Sort files either alphabetically or randomly using the provided seed:
@@ -1172,12 +1177,12 @@ trait ParallelTesting extends RunnerOrchestration { self =>
    *  - Directories can have an associated check-file, where the check file has
    *    the same name as the directory (with the file extension `.check`)
    */
-  def compileFilesInDir(f: String, flags: TestFlags)(implicit testGroup: TestGroup): CompilationTest = {
+  def compileFilesInDir(f: String, flags: TestFlags, blacklist: Set[String] = Set.empty)(implicit testGroup: TestGroup): CompilationTest = {
     val outDir = defaultOutputDir + testGroup + "/"
     val sourceDir = new JFile(f)
     checkRequirements(f, sourceDir, outDir)
 
-    val (dirs, files) = compilationTargets(sourceDir)
+    val (dirs, files) = compilationTargets(sourceDir, blacklist)
 
     val targets =
       files.map(f => JointCompilationSource(testGroup.name, Array(f), flags, createOutputDirsForFile(f, sourceDir, outDir))) ++
@@ -1207,13 +1212,14 @@ trait ParallelTesting extends RunnerOrchestration { self =>
    *  Tests in the first part of the tuple must be executed before the second.
    *  Both testsRequires explicit delete().
    */
-  def compileTastyInDir(f: String, flags0: TestFlags)(implicit testGroup: TestGroup): (CompilationTest, CompilationTest) = {
+  def compileTastyInDir(f: String, flags0: TestFlags, blacklist: Set[String] = Set.empty)(
+      implicit testGroup: TestGroup): (CompilationTest, CompilationTest) = {
     val outDir = defaultOutputDir + testGroup + "/"
     val flags = flags0 and "-Yretain-trees"
     val sourceDir = new JFile(f)
     checkRequirements(f, sourceDir, outDir)
 
-    val (dirs, files) = compilationTargets(sourceDir)
+    val (dirs, files) = compilationTargets(sourceDir, blacklist)
 
     val targets =
       files.map { f =>
@@ -1223,7 +1229,7 @@ trait ParallelTesting extends RunnerOrchestration { self =>
     // TODO add SeparateCompilationSource from tasty?
 
     // Create a CompilationTest and let the user decide whether to execute a pos or a neg test
-    val generateClassFiles = compileFilesInDir(f, flags0)
+    val generateClassFiles = compileFilesInDir(f, flags0, blacklist)
     (generateClassFiles.keepOutput, new CompilationTest(targets).keepOutput)
   }
 

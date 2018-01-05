@@ -85,8 +85,11 @@ class Erasure extends Phase with DenotTransformer {
           ref.copySymDenotation(symbol = newSymbol, owner = newOwner, initFlags = newFlags, info = newInfo)
         }
       }
-    case ref =>
-      ref.derivedSingleDenotation(ref.symbol, transformInfo(ref.symbol, ref.info))
+    case ref: JointRefDenotation =>
+      new UniqueRefDenotation(
+        ref.symbol, transformInfo(ref.symbol, ref.symbol.info), ref.validFor)
+    case _ =>
+      ref.derivedSingleDenotation(ref.symbol, transformInfo(ref.symbol, ref.symbol.info))
   }
 
   val eraser = new Erasure.Typer
@@ -241,11 +244,11 @@ object Erasure {
      *  in ExtensionMethods#transform.
      */
     def cast(tree: Tree, pt: Type)(implicit ctx: Context): Tree = trace(i"cast ${tree.tpe.widen} --> $pt", show = true) {
+
       def wrap(tycon: TypeRef) =
         ref(u2evt(tycon.typeSymbol.asClass)).appliedTo(tree)
       def unwrap(tycon: TypeRef) =
         ref(evt2u(tycon.typeSymbol.asClass)).appliedTo(tree)
-
 
       assert(!pt.isInstanceOf[SingletonType], pt)
       if (pt isRef defn.UnitClass) unbox(tree, pt)

@@ -5,7 +5,6 @@ package core
 import Types._, Contexts._, Symbols._, Denotations._, SymDenotations._, StdNames._, Names._
 import Flags._, Scopes._, Decorators._, NameOps._, util.Positions._, Periods._
 import unpickleScala2.Scala2Unpickler.ensureConstructor
-import scala.annotation.{ switch, meta }
 import scala.collection.{ mutable, immutable }
 import PartialFunction._
 import collection.mutable
@@ -67,7 +66,7 @@ class Definitions {
     enterTypeField(cls, name, flags | ClassTypeParamCreationFlags, scope)
 
   private def enterSyntheticTypeParam(cls: ClassSymbol, paramFlags: FlagSet, scope: MutableScope, suffix: String = "T0") =
-    enterTypeParam(cls, suffix.toTypeName.expandedName(cls), paramFlags, scope)
+    enterTypeParam(cls, suffix.toTypeName, paramFlags, scope)
 
   // NOTE: Ideally we would write `parentConstrs: => Type*` but SIP-24 is only
   // implemented in Dotty and not in Scala 2.
@@ -146,11 +145,20 @@ class Definitions {
   }
 
   private def enterPolyMethod(cls: ClassSymbol, name: TermName, typeParamCount: Int,
-                    resultTypeFn: PolyType => Type, flags: FlagSet = EmptyFlags) = {
+                    resultTypeFn: PolyType => Type, flags: FlagSet = EmptyFlags,
+                    useCompleter: Boolean = false) = {
     val tparamNames = PolyType.syntheticParamNames(typeParamCount)
     val tparamInfos = tparamNames map (_ => TypeBounds.empty)
-    val ptype = PolyType(tparamNames)(_ => tparamInfos, resultTypeFn)
-    enterMethod(cls, name, ptype, flags)
+    def ptype = PolyType(tparamNames)(_ => tparamInfos, resultTypeFn)
+    val info =
+      if (useCompleter)
+        new LazyType {
+          def complete(denot: SymDenotation)(implicit ctx: Context): Unit = {
+            denot.info = ptype
+          }
+        }
+      else ptype
+    enterMethod(cls, name, info, flags)
   }
 
   private def enterT1ParameterlessMethod(cls: ClassSymbol, name: TermName, resultTypeFn: PolyType => Type, flags: FlagSet) =
@@ -210,7 +218,7 @@ class Definitions {
    *  members at runtime.
    */
   lazy val ScalaShadowingPackageVal = ctx.requiredPackage(nme.scalaShadowing)
-  lazy val ScalaShadowingPackageClass = ScalaShadowingPackageVal.moduleClass.asClass
+  def ScalaShadowingPackageClass(implicit ctx: Context) = ScalaShadowingPackageVal.moduleClass.asClass
 
   /** Note: We cannot have same named methods defined in Object and Any (and AnyVal, for that matter)
    *  because after erasure the Any and AnyVal references get remapped to the Object methods
@@ -290,13 +298,22 @@ class Definitions {
   /** Marker method to indicate an argument to a call-by-name parameter.
    *  Created by byNameClosures and elimByName, eliminated by Erasure,
    */
-  lazy val cbnArg = enterPolyMethod(
-      OpsPackageClass, nme.cbnArg, 1,
+  lazy val cbnArg = enterPolyMethod(OpsPackageClass, nme.cbnArg, 1,
       pt => MethodType(List(FunctionOf(Nil, pt.paramRefs(0))), pt.paramRefs(0)))
 
   /** Method representing a throw */
   lazy val throwMethod = enterMethod(OpsPackageClass, nme.THROWkw,
       MethodType(List(ThrowableType), NothingType))
+
+  /** Method representing a term quote */
+  lazy val quoteMethod = enterPolyMethod(OpsPackageClass, nme.QUOTE, 1,
+      pt => MethodType(pt.paramRefs(0) :: Nil, QuotedExprType.appliedTo(pt.paramRefs(0) :: Nil)),
+      useCompleter = true)
+
+  /** Method representing a type quote */
+  lazy val typeQuoteMethod = enterPolyMethod(OpsPackageClass, nme.TYPE_QUOTE, 1,
+      pt => QuotedTypeType.appliedTo(pt.paramRefs(0) :: Nil),
+      useCompleter = true)
 
   lazy val NothingClass: ClassSymbol = enterCompleteClassSymbol(
     ScalaPackageClass, tpnme.Nothing, AbstractFinal, List(AnyClass.typeRef))
@@ -397,6 +414,7 @@ class Definitions {
 
   lazy val UnitType: TypeRef = valueTypeRef("scala.Unit", BoxedUnitType, java.lang.Void.TYPE, UnitEnc, nme.specializedTypeNames.Void)
   def UnitClass(implicit ctx: Context) = UnitType.symbol.asClass
+  def UnitModuleClass(implicit ctx: Context) = UnitType.symbol.asClass.linkedClass
   lazy val BooleanType = valueTypeRef("scala.Boolean", BoxedBooleanType, java.lang.Boolean.TYPE, BooleanEnc, nme.specializedTypeNames.Boolean)
   def BooleanClass(implicit ctx: Context) = BooleanType.symbol.asClass
     lazy val Boolean_notR   = BooleanClass.requiredMethodRef(nme.UNARY_!)
@@ -511,7 +529,6 @@ class Definitions {
   lazy val IndexOutOfBoundsException = ctx.requiredClass("java.lang.IndexOutOfBoundsException")
   lazy val ClassClass                = ctx.requiredClass("java.lang.Class")
   lazy val BoxedNumberClass          = ctx.requiredClass("java.lang.Number")
-  lazy val ThrowableClass            = ctx.requiredClass("java.lang.Throwable")
   lazy val ClassCastExceptionClass   = ctx.requiredClass("java.lang.ClassCastException")
   lazy val ArithmeticExceptionClass  = ctx.requiredClass("java.lang.ArithmeticException")
     lazy val ArithmeticExceptionClass_stringConstructor  = ArithmeticExceptionClass.info.member(nme.CONSTRUCTOR).suchThat(_.info.firstParamTypes match {
@@ -526,6 +543,8 @@ class Definitions {
 
   // in scalac modified to have Any as parent
 
+  lazy val ThrowableType: TypeRef          = ctx.requiredClassRef("java.lang.Throwable")
+  def ThrowableClass(implicit ctx: Context) = ThrowableType.symbol.asClass
   lazy val SerializableType: TypeRef       = ctx.requiredClassRef("scala.Serializable")
   def SerializableClass(implicit ctx: Context) = SerializableType.symbol.asClass
   lazy val StringBuilderType: TypeRef      = ctx.requiredClassRef("scala.collection.mutable.StringBuilder")
@@ -583,6 +602,21 @@ class Definitions {
   def ClassTagClass(implicit ctx: Context) = ClassTagType.symbol.asClass
   def ClassTagModule(implicit ctx: Context) = ClassTagClass.companionModule
 
+  lazy val QuotedExprType = ctx.requiredClassRef("scala.quoted.Expr")
+  def QuotedExprClass(implicit ctx: Context) = QuotedExprType.symbol.asClass
+
+    def QuotedExpr_~(implicit ctx: Context) = QuotedExprClass.requiredMethod(nme.UNARY_~)
+    def QuotedExpr_run(implicit ctx: Context) = QuotedExprClass.requiredMethod(nme.run)
+
+  lazy val QuotedTypeType = ctx.requiredClassRef("scala.quoted.Type")
+  def QuotedTypeClass(implicit ctx: Context) = QuotedTypeType.symbol.asClass
+
+    def QuotedType_~(implicit ctx: Context) =
+      QuotedTypeClass.info.member(tpnme.UNARY_~).symbol.asType
+
+  def Unpickler_unpickleExpr = ctx.requiredMethod("scala.runtime.quoted.Unpickler.unpickleExpr")
+  def Unpickler_unpickleType = ctx.requiredMethod("scala.runtime.quoted.Unpickler.unpickleType")
+
   lazy val EqType = ctx.requiredClassRef("scala.Eq")
   def EqClass(implicit ctx: Context) = EqType.symbol.asClass
   def EqModule(implicit ctx: Context) = EqClass.companionModule
@@ -632,8 +666,6 @@ class Definitions {
   def MigrationAnnot(implicit ctx: Context) = MigrationAnnotType.symbol.asClass
   lazy val NativeAnnotType                   = ctx.requiredClassRef("scala.native")
   def NativeAnnot(implicit ctx: Context) = NativeAnnotType.symbol.asClass
-  lazy val RemoteAnnotType                   = ctx.requiredClassRef("scala.remote")
-  def RemoteAnnot(implicit ctx: Context) = RemoteAnnotType.symbol.asClass
   lazy val RepeatedAnnotType = ctx.requiredClassRef("scala.annotation.internal.Repeated")
   def RepeatedAnnot(implicit ctx: Context) = RepeatedAnnotType.symbol.asClass
   lazy val SourceFileAnnotType = ctx.requiredClassRef("scala.annotation.internal.SourceFile")
@@ -685,7 +717,6 @@ class Definitions {
   // Derived types
 
   def RepeatedParamType = RepeatedParamClass.typeRef
-  def ThrowableType = ThrowableClass.typeRef
 
   def ClassType(arg: Type)(implicit ctx: Context) = {
     val ctype = ClassClass.typeRef
@@ -833,6 +864,9 @@ class Definitions {
   def isAbstractFunctionClass(cls: Symbol) = isVarArityClass(cls, str.AbstractFunction)
   def isTupleClass(cls: Symbol) = isVarArityClass(cls, str.Tuple)
   def isProductClass(cls: Symbol) = isVarArityClass(cls, str.Product)
+
+  def isScalaShadowingPackageClass(cls: Symbol) =
+    cls.name == tpnme.scalaShadowing && cls.owner == RootClass
 
   /** Returns the erased class of the function class `cls`
    *    - FunctionN for N > 22 becomes FunctionXXL
@@ -1069,7 +1103,8 @@ class Definitions {
     OpsPackageClass)
 
   /** Lists core methods that don't have underlying bytecode, but are synthesized on-the-fly in every reflection universe */
-  lazy val syntheticCoreMethods = AnyMethods ++ ObjectMethods ++ List(String_+, throwMethod)
+  lazy val syntheticCoreMethods =
+    AnyMethods ++ ObjectMethods ++ List(String_+, throwMethod, quoteMethod, typeQuoteMethod)
 
   lazy val reservedScalaClassNames: Set[Name] = syntheticScalaClasses.map(_.name).toSet
 
@@ -1079,12 +1114,12 @@ class Definitions {
   def init()(implicit ctx: Context) = {
     this.ctx = ctx
     if (!_isInitialized) {
-      // force initialization of every symbol that is synthesized or hijacked by the compiler
-      val forced = syntheticCoreClasses ++ syntheticCoreMethods ++ ScalaValueClasses()
-
       // Enter all symbols from the scalaShadowing package in the scala package
       for (m <- ScalaShadowingPackageClass.info.decls)
         ScalaPackageClass.enter(m)
+
+      // force initialization of every symbol that is synthesized or hijacked by the compiler
+      val forced = syntheticCoreClasses ++ syntheticCoreMethods ++ ScalaValueClasses()
 
       _isInitialized = true
     }

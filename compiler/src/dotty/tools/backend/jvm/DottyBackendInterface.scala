@@ -169,8 +169,10 @@ class DottyBackendInterface(outputDirectory: AbstractFile, val superCallsMap: Ma
     s eq defn.newArrayMethod
   }
 
-  def isBox(sym: Symbol): Boolean = Erasure.Boxing.isBox(sym)
-  def isUnbox(sym: Symbol): Boolean = Erasure.Boxing.isUnbox(sym)
+  def isBox(sym: Symbol): Boolean =
+    Erasure.Boxing.isBox(sym) && sym.denot.owner != defn.UnitModuleClass
+  def isUnbox(sym: Symbol): Boolean =
+    Erasure.Boxing.isUnbox(sym) && sym.denot.owner != defn.UnitModuleClass
 
   val primitives: Primitives = new Primitives {
     val primitives = new DottyPrimitives(ctx)
@@ -691,7 +693,6 @@ class DottyBackendInterface(outputDirectory: AbstractFile, val superCallsMap: Ma
     def hasPackageFlag: Boolean = sym is Flags.Package
     def isImplClass: Boolean = sym is Flags.ImplClass
     def isInterface: Boolean = (sym is Flags.PureInterface) || (sym is Flags.Trait)
-    def hasGetter: Boolean = false // used only for generaration of beaninfo todo: implement
     def isGetter: Boolean = toDenot(sym).isGetter
     def isSetter: Boolean = toDenot(sym).isSetter
     def isGetClass: Boolean = sym eq defn.Any_getClass
@@ -1170,7 +1171,9 @@ class DottyBackendInterface(outputDirectory: AbstractFile, val superCallsMap: Ma
   object Template extends TemplateDeconstructor {
     def _1: List[Tree] = field.parents
     def _2: ValDef = field.self
-    def _3: List[Tree] = field.constr :: field.body
+    def _3: List[Tree] =
+      if (field.constr.rhs.isEmpty) field.body
+      else field.constr :: field.body
   }
 
   object Bind extends BindDeconstructor {
