@@ -28,10 +28,12 @@ import Simplify._
 class InlineLocalObjects(val simplifyPhase: Simplify) extends Optimisation {
   import ast.tpd._
 
-  val candidatesCtors = mutable.HashMap[Symbol, Tree]()
 
   // ValDefs whose lhs is used with `._1` (or any getter call).
   val gettersCalled = mutable.HashSet[Symbol]()
+
+  // constructor for case class instances: empty if not uniformly contructed
+  val candidatesCtors = mutable.HashMap[Symbol, Tree]()
 
   // Immutable sorted map from class to new fields, initialized between visitor and transformer.
   var newFieldsMapping: Map[Symbol, LinkedHashMap[Symbol, Symbol]] = null
@@ -86,7 +88,7 @@ class InlineLocalObjects(val simplifyPhase: Simplify) extends Optimisation {
             val newFieldsDefs = newFields.map(nf => ValDef(nf.asTerm, EmptyTree))
             val recreate      = cpy.ValDef(t)(rhs = fun.appliedToArgs(newFields.map(x => ref(x))))
             simplify.println(s"Replacing ${t.symbol.fullName} with stack-allocated fields ($newFields)")
-            Block(newFieldsDefs :+ ctor, recreate)
+            Thicket(newFieldsDefs :+ ctor :+ recreate)
 
           case None => t
         }
@@ -102,6 +104,7 @@ class InlineLocalObjects(val simplifyPhase: Simplify) extends Optimisation {
     }
   }
 
+  // find ctor in tree, if there are several return None
   private def caseClassCtor(tree: Tree)(implicit ctx: Context): Option[Tree] = 
     tree match {
       case t @ If(cond, thenp, elsep) => 
@@ -115,6 +118,7 @@ class InlineLocalObjects(val simplifyPhase: Simplify) extends Optimisation {
       case t => None
     }
 
+  // remove lhs ctors from from tree
   private def transformCaseClassCtor(lhs: Symbol, tree: Tree)(implicit ctx: Context): Tree = 
     tree match {
       case t @ If(cond, thenp, elsep) => 
@@ -123,7 +127,7 @@ class InlineLocalObjects(val simplifyPhase: Simplify) extends Optimisation {
       case t @ Block(stats, expr) => 
         Block(stats, transformCaseClassCtor(lhs, expr))
 
-      case t @ Apply(fun, args)  if fun.symbol.isConstructor => 
+      case t @ Apply(fun, args) if fun.symbol.isConstructor => 
         val newFields = newFieldsMapping(lhs).values.toList 
         val newFieldsDefs = newFields.zip(args).map { case (nf, arg) => Assign(ref(nf), arg) }
         Block(newFieldsDefs, EmptyTree)
