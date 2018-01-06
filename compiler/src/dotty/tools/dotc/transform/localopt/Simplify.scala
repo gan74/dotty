@@ -118,11 +118,15 @@ class Simplify extends MiniPhase with IdentityDenotTransformer {
             }
           }.transform(rhs0)
 
+          if (optimisation.name == "RemoveUnnecessaryNullChecks") {
+            println("-------------------------------------------------------------\n" + rhs0.show)
+          }
+
           // Clean
           optimisation.clear()
         }
       }
-      println("-------------------------------------------------------------\n" + rhs0.show)
+      //println("=============================================================\n" + rhs0.show)
       if (rhs0 ne tree.rhs) tpd.cpy.DefDef(tree)(rhs = rhs0)
       else tree
     } else tree

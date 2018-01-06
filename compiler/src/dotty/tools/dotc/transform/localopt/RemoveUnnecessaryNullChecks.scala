@@ -28,6 +28,7 @@ class RemoveUnnecessaryNullChecks extends Optimisation {
 
   val checked = newMutableSymbolMap[Symbol]
   val ignore = mutable.Set[Symbol]()
+  val newSymbols = mutable.Set[Symbol]()
 
 
 
@@ -44,6 +45,7 @@ class RemoveUnnecessaryNullChecks extends Optimisation {
   def clear(): Unit = {
     checked.clear()
     ignore.clear()
+    newSymbols.clear()
   }
 
   def visitor(implicit ctx: Context): Tree => Unit = {
@@ -54,7 +56,9 @@ class RemoveUnnecessaryNullChecks extends Optimisation {
       }
 
     case NullCheck(sym) if !checked.contains(sym) =>
-      checked.put(sym, companionSymbol(sym))
+      val newSym = companionSymbol(sym)
+      checked.put(sym, newSym)
+      newSymbols += newSym
 
     case _ => 
   }
@@ -74,14 +78,13 @@ class RemoveUnnecessaryNullChecks extends Optimisation {
     case blk @ Block(stats, expr) =>
       val newStats = stats.mapConserve {
         case s @ Apply(Select(id: Ident, _), _) if checked.contains(id.symbol) && !ignore.contains(id.symbol) =>
-          val toFalse = Assign(ref(checked(id.symbol)), Literal(Constant(false)))
-          Thicket(List(s, toFalse))
-          
+          Thicket(List(s, toFalse(checked(id.symbol))))
         case s => s
       }
-
-
       cpy.Block(blk)(newStats, expr)
+
+    case If(id: Ident, thenp, elsep) if newSymbols.contains(id.symbol) =>
+      If(id, Block(List(toTrue(id.symbol)), thenp), Block(List(toFalse(id.symbol)), thenp))
 
     case t => t
   }
@@ -115,10 +118,12 @@ class RemoveUnnecessaryNullChecks extends Optimisation {
     else if (isAlwaysNull(tree)) Some(true)
     else None
 
+
   private def isVar(s: Symbol)(implicit ctx: Context): Boolean = s.is(Mutable | Lazy)
 
+  private def toFalse(sym: Symbol)(implicit ctx: Context) = Assign(ref(sym), Literal(Constant(false)))
+  private def toTrue(sym: Symbol)(implicit ctx: Context) = Assign(ref(sym), Literal(Constant(true)))
   private def nullcheck(sym: Symbol)(implicit ctx: Context) = ref(sym).select(defn.Object_eq).appliedTo(Literal(Constant(null)))
-
   private def companionSymbol(sym: Symbol)(implicit ctx: Context) = 
     ctx.newSymbol(sym.owner, LocalOptNullChecksName.fresh(), Synthetic | Mutable, nullcheck(sym).tpe)
 }
