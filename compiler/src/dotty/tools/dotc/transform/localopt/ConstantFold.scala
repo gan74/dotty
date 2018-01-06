@@ -97,6 +97,8 @@ import Simplify.desugarIdent
     case If(t @ Apply(Select(recv, _), Nil), thenp, elsep) if t.symbol eq defn.Boolean_! =>
       If(recv, elsep, thenp)
 
+    // This is debatable, maybe only if we can fold the resulting apply. 
+    // In the current state, most kwown pure expression can be folded so we do it anyway
     case t @ Apply(meth1: Select, List(If(cond, thenp, elsep))) if isPureExpr(t) =>
         If(cond, Apply(meth1, List(thenp)), Apply(meth1, List(elsep)))
 
