@@ -2,6 +2,7 @@ package dotty.tools.dotc
 package transform.localopt
 
 import core.Contexts.Context
+import core.Constants.Constant
 import core.Symbols._
 import core.Types._
 import typer.ConstFold
@@ -51,6 +52,17 @@ import Simplify.desugarIdent
     case If(cond1, thenp1, If(cond2, thenp2, elsep2)) if isSimilar(thenp1, elsep2) =>
       If(cond1.select(defn.Boolean_||).appliedTo(cond2.select(defn.Boolean_!).ensureApplied), thenp1, thenp2)
 
+    case If(cond1, If(cond2, thenp2, elsep2), elsep1) if isSimilar(cond1, cond2) =>
+      If(cond1, thenp2, elsep1)
+
+    case If(cond1, thenp1, If(cond2, thenp2, elsep2)) if isSimilar(cond1, cond2) =>
+      If(cond1, thenp1, elsep2)
+    
+    case If(If(cond, then1, else1), then2, else2) =>
+      If(cond.select(defn.Boolean_&&).appliedTo(then1).select(defn.Boolean_||).appliedTo(else1), then2, else2)
+
+
+
     case If(t: Literal, thenp, elsep) =>
       if (t.const.booleanValue) thenp
       else elsep
@@ -80,8 +92,15 @@ import Simplify.desugarIdent
     case If(t @ Select(recv, _), thenp, elsep) if t.symbol eq defn.Boolean_! =>
       If(recv, elsep, thenp)
 
+    
+
     case If(t @ Apply(Select(recv, _), Nil), thenp, elsep) if t.symbol eq defn.Boolean_! =>
       If(recv, elsep, thenp)
+
+    // This is debatable, maybe only if we can fold the resulting apply. 
+    // In the current state, most kwown pure expression can be folded so we do it anyway
+    case t @ Apply(meth1: Select, List(If(cond, thenp, elsep))) if isPureExpr(t) =>
+        If(cond, Apply(meth1, List(thenp)), Apply(meth1, List(elsep)))
 
     // TODO: similar trick for comparisons.
     // TODO: handle comparison with min\max values
@@ -92,6 +111,12 @@ import Simplify.desugarIdent
     case meth1 @ Select(meth2 @ Select(rec, _), _)
       if meth1.symbol == defn.Boolean_! && meth2.symbol == defn.Boolean_! && !ctx.erasedTypes =>
         rec
+
+    // unary ops
+    case t @ Select(lhs: Literal, _) =>
+      val s = ConstFold.apply(t)
+      if ((s ne null) && s.tpe.isInstanceOf[ConstantType]) Literal(s.tpe.asInstanceOf[ConstantType].value)
+      else t
 
     case t @ Apply(Select(lhs, _), List(rhs)) =>
       val sym = t.symbol
@@ -124,6 +149,12 @@ import Simplify.desugarIdent
           val const = asConst(l.tpe).value.booleanValue
           if (l.const.booleanValue) l
           else Block(lhs :: Nil, rhs)
+
+        case (Literal(Constant(false)), _) if sym == defn.Boolean_&& =>
+          Literal(Constant(false))
+
+        case (Literal(Constant(true)), _) if sym == defn.Boolean_|| =>
+          Literal(Constant(true))
 
         // case (Literal(Constant(1)), _)    if sym == defn.Int_*  => rhs
         // case (Literal(Constant(0)), _)    if sym == defn.Int_+  => rhs

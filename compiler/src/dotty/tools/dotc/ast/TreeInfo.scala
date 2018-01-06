@@ -364,19 +364,20 @@ trait TypedTreeInfo extends TreeInfo[Type] { self: Trees.Instance[Type] =>
       // Note: After uncurry, field accesses are represented as Apply(getter, Nil),
       // so an Apply can also be pure.
       if (args.isEmpty && fn.symbol.is(Stable)) exprPurity(fn)
-      else if (tree.tpe.isInstanceOf[ConstantType] && isKnownPureOp(tree.symbol))
-        // A constant expression with pure arguments is pure.
-        minOf(exprPurity(fn), args.map(exprPurity))
-      else Impure
+      else fn match {
+        case Select(lhs, _) if lhs.tpe.isInstanceOf[ConstantType] && isKnownPureOp(tree.symbol) => 
+          minOf(exprPurity(fn), args.map(exprPurity))
+        case _ => Impure
+      }
     case Typed(expr, _) =>
       exprPurity(expr)
     case Block(stats, expr) =>
       minOf(exprPurity(expr), stats.map(statPurity))
-    case Inlined(_, bindings, expr) =>
-      minOf(exprPurity(expr), bindings.map(statPurity))
     case NamedArg(_, expr) =>
       exprPurity(expr)
-    case _ =>
+    case If(cond, thenp, elsep) => 
+      exprPurity(cond).min(exprPurity(thenp)).min(exprPurity(elsep))
+    case t =>
       Impure
   }
 
