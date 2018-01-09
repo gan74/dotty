@@ -70,12 +70,12 @@ class RemoveUnnecessaryNullChecks extends Optimisation {
           case t: ValDef if !isVar(t.symbol) => 
             if (isAlwaysNull(t.rhs)) nullness += t.symbol -> true
             if (isNeverNull(t.rhs)) nullness += t.symbol -> false
-            t
+            transform(t, nullness)
 
           // throw NPE if id is null
           case t @ Apply(Select(id: Ident, _), _) if !isVar(id.symbol) => 
             nullness += id.symbol -> false
-            t
+            transform(t, nullness)
 
           case t => 
             transform(t, nullness)
