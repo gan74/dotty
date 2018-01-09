@@ -27,10 +27,16 @@ class RemoveUnnecessaryNullChecks extends Optimisation {
 
   // matches sym == null or null == sym
   object NullCheck {
-    def unapply(t: Apply)(implicit ctx: Context): Option[Symbol] =
+    def unapply(t: Apply)(implicit ctx: Context): Option[(Symbol, Boolean)] =
       t match {
-        case t @ Apply(Select(id: Ident, op), List(rhs)) if (t.symbol == defn.Object_eq || t.symbol == defn.Any_==) && !isVar(id.symbol) && isAlwaysNull(rhs) => Some(id.symbol)
-        case t @ Apply(Select(lhs, op), List(id: Ident)) if (t.symbol == defn.Object_eq || t.symbol == defn.Any_==) && !isVar(id.symbol) && isAlwaysNull(lhs) => Some(id.symbol)
+        case t @ Apply(Select(id: Ident, op), List(rhs)) if !isVar(id.symbol) && isAlwaysNull(rhs) => 
+          if (t.symbol == defn.Object_eq || t.symbol == defn.Any_==) Some((id.symbol, true))
+          else if (t.symbol == defn.Object_ne || t.symbol == defn.Any_!=) Some((id.symbol, false))
+          else None
+        case t @ Apply(Select(lhs, op), List(id: Ident)) if !isVar(id.symbol) && isAlwaysNull(lhs) => 
+          if (t.symbol == defn.Object_eq || t.symbol == defn.Any_==) Some((id.symbol, true))
+          else if (t.symbol == defn.Object_ne || t.symbol == defn.Any_!=) Some((id.symbol, false))
+          else None
         case _ => None
       }
   }
@@ -48,7 +54,7 @@ class RemoveUnnecessaryNullChecks extends Optimisation {
           override def transform(tree: Tree)(implicit ctx: Context): Tree = {
             val innerCtx = if (tree.isDef && tree.symbol.exists) ctx.withOwner(tree.symbol) else ctx
             super.transform(tree)(innerCtx) match {
-              case t @ NullCheck(sym) if nullness.contains(sym) => Literal(Constant(nullness(sym)))
+              case t @ NullCheck(sym, isNull) if nullness.contains(sym) => Literal(Constant(nullness(sym) == isNull))
               case t => t
             }
           }
@@ -78,15 +84,15 @@ class RemoveUnnecessaryNullChecks extends Optimisation {
         cpy.Block(blk)(newStats, transform(expr, nullness))
 
       // if (x == null)
-      case br @ If(cond @ NullCheck(sym), thenp, elsep) => 
-        val newThen = transform(thenp, mutable.Map(sym -> true))
-        val newElse = transform(elsep, mutable.Map(sym -> false))
+      case br @ If(cond @ NullCheck(sym, isNull), thenp, elsep) => 
+        val newThen = transform(thenp, mutable.Map(sym -> isNull))
+        val newElse = transform(elsep, mutable.Map(sym -> !isNull))
         cpy.If(br)(cond, newThen, newElse)
 
       // if (x != null)
-      case br @ If(cond @ Select(NullCheck(sym), _), thenp, elsep) if cond.symbol eq defn.Boolean_! =>
-        val newThen = transform(thenp, mutable.Map(sym -> false))
-        val newElse = transform(elsep, mutable.Map(sym -> true))
+      case br @ If(cond @ Select(NullCheck(sym, isNull), _), thenp, elsep) if cond.symbol eq defn.Boolean_! =>
+        val newThen = transform(thenp, mutable.Map(sym -> !isNull))
+        val newElse = transform(elsep, mutable.Map(sym -> isNull))
         cpy.If(br)(cond, newThen, newElse)
 
       case t => t
