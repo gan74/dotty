@@ -27,15 +27,15 @@ class RemoveUnnecessaryNullChecks extends Optimisation {
 
   // matches sym == null or null == sym
   object NullCheck {
-    def unapply(t: Apply)(implicit ctx: Context): Option[(Symbol, Boolean)] =
+    def unapply(t: Apply)(implicit ctx: Context): Option[(Symbol, Boolean, Tree)] =
       t match {
         case t @ Apply(Select(id: Ident, op), List(rhs)) if !isVar(id.symbol) && isAlwaysNull(rhs) => 
-          if (t.symbol == defn.Object_eq || t.symbol == defn.Any_==) Some((id.symbol, true))
-          else if (t.symbol == defn.Object_ne || t.symbol == defn.Any_!=) Some((id.symbol, false))
+          if (t.symbol == defn.Object_eq || t.symbol == defn.Any_==) Some((id.symbol, true, rhs))
+          else if (t.symbol == defn.Object_ne || t.symbol == defn.Any_!=) Some((id.symbol, false, rhs))
           else None
         case t @ Apply(Select(lhs, op), List(id: Ident)) if !isVar(id.symbol) && isAlwaysNull(lhs) => 
-          if (t.symbol == defn.Object_eq || t.symbol == defn.Any_==) Some((id.symbol, true))
-          else if (t.symbol == defn.Object_ne || t.symbol == defn.Any_!=) Some((id.symbol, false))
+          if (t.symbol == defn.Object_eq || t.symbol == defn.Any_==) Some((id.symbol, true, lhs))
+          else if (t.symbol == defn.Object_ne || t.symbol == defn.Any_!=) Some((id.symbol, false, lhs))
           else None
         case _ => None
       }
@@ -54,7 +54,7 @@ class RemoveUnnecessaryNullChecks extends Optimisation {
           override def transform(tree: Tree)(implicit ctx: Context): Tree = {
             val innerCtx = if (tree.isDef && tree.symbol.exists) ctx.withOwner(tree.symbol) else ctx
             super.transform(tree)(innerCtx) match {
-              case t @ NullCheck(sym, isNull) if nullness.contains(sym) => Literal(Constant(nullness(sym) == isNull))
+              case t @ NullCheck(sym, isNull, rhs) if nullness.contains(sym) => Block(List(rhs), Literal(Constant(nullness(sym) == isNull)))
               case t => t
             }
           }
@@ -84,13 +84,13 @@ class RemoveUnnecessaryNullChecks extends Optimisation {
         cpy.Block(blk)(newStats, transform(expr, nullness))
 
       // if (x == null)
-      case br @ If(cond @ NullCheck(sym, isNull), thenp, elsep) => 
+      case br @ If(cond @ NullCheck(sym, isNull, _), thenp, elsep) => 
         val newThen = transform(thenp, mutable.Map(sym -> isNull))
         val newElse = transform(elsep, mutable.Map(sym -> !isNull))
         cpy.If(br)(cond, newThen, newElse)
 
       // if (x != null)
-      case br @ If(cond @ Select(NullCheck(sym, isNull), _), thenp, elsep) if cond.symbol eq defn.Boolean_! =>
+      case br @ If(cond @ Select(NullCheck(sym, isNull, _), _), thenp, elsep) if cond.symbol eq defn.Boolean_! =>
         val newThen = transform(thenp, mutable.Map(sym -> !isNull))
         val newElse = transform(elsep, mutable.Map(sym -> isNull))
         cpy.If(br)(cond, newThen, newElse)
