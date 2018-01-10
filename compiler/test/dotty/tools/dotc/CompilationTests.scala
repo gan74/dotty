@@ -55,6 +55,8 @@ class CompilationTests extends ParallelTesting {
     compileFile("../tests/pos-scala2/rewrites.scala", scala2Mode.and("-rewrite")).copyToTarget() +
     compileFile("../tests/pos-special/utf8encoded.scala", explicitUTF8) +
     compileFile("../tests/pos-special/utf16encoded.scala", explicitUTF16) +
+    compileFile("../tests/pos-special/i3323.scala", defaultOptions.and("-Xfatal-warnings")) +
+    compileFile("../tests/pos-special/i3323b.scala", defaultOptions.and("-Xfatal-warnings")) +
     compileFile("../tests/pos-special/i3589-b.scala", defaultOptions.and("-Xfatal-warnings")) +
     compileList(
       "compileMixed",
@@ -69,7 +71,6 @@ class CompilationTests extends ParallelTesting {
       ),
       scala2Mode
     ) +
-    compileFilesInDir("../tests/pos-special/i3273", defaultOptions) +
     compileFilesInDir("../tests/pos-special/spec-t5545", defaultOptions) +
     compileFilesInDir("../tests/pos-special/strawman-collections", defaultOptions) +
     compileFile("../scala2-library/src/library/scala/collection/immutable/IndexedSeq.scala", defaultOptions) +
@@ -110,6 +111,7 @@ class CompilationTests extends ParallelTesting {
     implicit val testGroup: TestGroup = TestGroup("posTwice")
     compileFile("../tests/pos/Labels.scala", defaultOptions) +
     compileFilesInDir("../tests/pos-java-interop", defaultOptions) +
+    compileFilesInDir("../tests/pos-java-interop-separate", defaultOptions) +
     compileFile("../tests/pos/t2168.scala", defaultOptions) +
     compileFile("../tests/pos/erasure.scala", defaultOptions) +
     compileFile("../tests/pos/Coder.scala", defaultOptions) +
