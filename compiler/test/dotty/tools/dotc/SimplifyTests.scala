@@ -492,35 +492,6 @@ abstract class SimplifyTests(val optimise: Boolean) extends DottyBytecodeTest {
       """,
       """""")*/
 
-
-  @Test def foldInstanceOf =
-    check(
-      """
-         |val i: Either[Int, String] = Left(7)
-         |if (i.isInstanceOf[Either[Int, String]]) {
-         |  if (i.isInstanceOf[Left[Int, String]]) print("Int")
-         |  if (i.isInstanceOf[Right[Int, String]]) print("String")
-         |}
-      """,
-      """
-        |val i: Either[Int, String] = Left(7)
-        |print("Int")
-      """)
-
-  @Test def foldInstanceOfPatMat =
-    check(
-      """
-         |val i: Either[Int, String] = Left(7)
-         |i match {
-         |  case Left(_) => print("Int")
-         |  case Right(_) => print("String")
-         |}
-      """,
-      """
-         |val i: Either[Int, String] = Left(7)
-         |print("Int")
-      """)
-
   // @Test def listPatmapExample =
   //   check(
   //     """
