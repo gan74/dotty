@@ -24,19 +24,31 @@ class InlineVals extends Optimisation {
   val defined = newMutableSymbolMap[ValDef]
   val timesUsed = newMutableSymbolMap[Int]
 
+  val impureTimeUsed = newMutableSymbolMap[Int]
+
   def clear(): Unit = {
+    impureTimeUsed.toMap.foreach(x => { if (x._2 < 0) ??? })
     defined.clear()
     timesUsed.clear()
+    impureTimeUsed.clear()
   }
 
   def visitor(implicit ctx: Context): Tree => Unit = {
-    case t: ValDef if t.rhs != EmptyTree && isVal(t.symbol) => 
-      if (isPureExpr(t.rhs))
+    case t: ValDef if t.rhs != EmptyTree && isVal(t.symbol) && isPureExpr(t.rhs) =>
         defined.put(t.symbol, t)
+
+    case t: ValDef if t.rhs != EmptyTree =>
+        impureTimeUsed.put(t.symbol, 0)
 
     case t: Ident if defined.contains(t.symbol) =>
       val b4 = timesUsed.getOrElseUpdate(t.symbol, 0)
       timesUsed.update(t.symbol, b4 + 1)
+
+    case Assign(id: Ident, _) if impureTimeUsed.contains(id.symbol) =>
+      impureTimeUsed.update(id.symbol, impureTimeUsed(id.symbol) - 1)
+
+    case t: Ident if impureTimeUsed.contains(t.symbol) => 
+      impureTimeUsed.update(t.symbol, impureTimeUsed(t.symbol) + 1)
 
     case _ =>
   }
@@ -44,6 +56,12 @@ class InlineVals extends Optimisation {
   def transformer(implicit ctx: Context): Tree => Tree = {
     case t: ValDef if timesUsed.getOrElse(t.symbol, 0) == 1 =>
       EmptyTree
+
+    case t: ValDef if impureTimeUsed.getOrElse(t.symbol, 1) <= 0 =>
+      t.rhs
+
+    case Assign(id: Ident, rhs) if impureTimeUsed.getOrElse(id.symbol, 1) <= 0 =>
+      rhs
 
     case t: Ident if timesUsed.getOrElse(t.symbol, 0) == 1 =>
       defined(t.symbol).rhs.changeOwner(t.symbol.owner, ctx.owner)
