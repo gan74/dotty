@@ -32,8 +32,8 @@ class InlineLocalObjects(val simplifyPhase: Simplify) extends Optimisation {
   // ValDefs whose lhs is used with `._1` (or any getter call).
   val gettersCalled = mutable.HashSet[Symbol]()
 
-  // constructor for case class instances: empty if not uniformly contructed
-  val candidatesCtors = mutable.HashMap[Symbol, Tree]()
+  // ValDefs whose rhs is a case class instantiation: potential candidates.
+  val candidates = mutable.HashSet[Symbol]()
 
   // Immutable sorted map from class to new fields, initialized between visitor and transformer.
   var newFieldsMapping: Map[Symbol, LinkedHashMap[Symbol, Symbol]] = null
@@ -43,14 +43,14 @@ class InlineLocalObjects(val simplifyPhase: Simplify) extends Optimisation {
   //                          ValDefs of the classes that are being torn apart; = candidates.intersect(gettersCalled)
 
   def clear(): Unit = {
-    candidatesCtors.clear()
+    candidates.clear()
     gettersCalled.clear()
     newFieldsMapping = null
   }
 
   def initNewFieldsMapping()(implicit ctx: Context): Unit =
     if (newFieldsMapping == null) {
-      newFieldsMapping = candidatesCtors.keySet.intersect(gettersCalled).map { refVal =>
+      newFieldsMapping = candidates.intersect(gettersCalled).map { refVal =>
         val accessors = refVal.info.classSymbol.caseAccessors.filter(_.isGetter)
         val newLocals = accessors.map { x =>
           val owner: Symbol  = refVal.owner
@@ -67,11 +67,8 @@ class InlineLocalObjects(val simplifyPhase: Simplify) extends Optimisation {
 
 
   def visitor(implicit ctx: Context): Tree => Unit = {
-    case t: ValDef if isCaseClassDef(t) =>
-      caseClassCtor(t.rhs) match {
-        case Some(ctor) => candidatesCtors += t.symbol -> ctor
-        case None => 
-      }
+    case t: ValDef if isCaseClassDef(t) && shouldInline(t.rhs) =>
+      candidates += t.symbol
     case t @ Select(qual, _) if isImmutableAccessor(t) =>
       gettersCalled += qual.symbol
     case _ =>
@@ -80,21 +77,14 @@ class InlineLocalObjects(val simplifyPhase: Simplify) extends Optimisation {
   def transformer(implicit ctx: Context): Tree => Tree = {
     initNewFieldsMapping();
     {
-      case t: ValDef if isCaseClassDef(t) && newFieldsMapping.contains(t.symbol) =>
-        candidatesCtors.get(t.symbol) match {
-          case Some(fun) =>
-            val ctor          = transformCaseClassCtor(t.symbol, t.rhs)
-            val newFields     = newFieldsMapping(t.symbol).values.toList
-            val newFieldsDefs = newFields.map(nf => ValDef(nf.asTerm, EmptyTree))
-            val recreate      = cpy.ValDef(t)(rhs = fun.appliedToArgs(newFields.map(x => ref(x))))
-            simplify.println(s"Replacing ${t.symbol.fullName} with stack-allocated fields ($newFields)")
-            Thicket(newFieldsDefs :+ ctor :+ recreate)
+      case t: ValDef if isCaseClassDef(t) && newFieldsMapping.contains(t.symbol) && candidates.contains(t.symbol) =>
+        val newFields     = newFieldsMapping(t.symbol).values.toList
+        val newFieldsDefs = newFields.map(nf => ValDef(nf.asTerm, EmptyTree))
+        val recreate      = cpy.ValDef(t)(rhs = transformCaseClassCtor(t.symbol, t.rhs))
+        simplify.println(s"Replacing ${t.symbol.fullName} with stack-allocated fields ($newFields)")
+        Thicket(newFieldsDefs :+ recreate)
 
-          case None => t
-        }
-        
-
-      case t @ Select(rec, _) if isImmutableAccessor(t) && candidatesCtors.contains(rec.symbol) =>
+      case t @ Select(rec, _) if isImmutableAccessor(t) && candidates.contains(rec.symbol) =>
         newFieldsMapping.getOrElse(rec.symbol, Map.empty[Symbol, Symbol]).get(t.symbol) match {
           case None         => t
           case Some(newSym) => ref(newSym)
@@ -104,33 +94,36 @@ class InlineLocalObjects(val simplifyPhase: Simplify) extends Optimisation {
     }
   }
 
-  // find ctor in tree, if there are several return None
-  private def caseClassCtor(tree: Tree)(implicit ctx: Context): Option[Tree] = 
+  // should we try to inline this rhs ?
+  private def shouldInline(tree: Tree, forked: Boolean = false)(implicit ctx: Context): Boolean = 
     tree match {
-      case t @ If(cond, thenp, elsep) => 
-        (caseClassCtor(thenp), caseClassCtor(elsep)) match {
-          case (Some(thenFun), Some(elseFun)) if thenFun.symbol == elseFun.symbol => Some(thenFun)
-          case _ => None
-        }
-
-      case t @ Block(stats, expr) => caseClassCtor(expr)
-      case t @ Apply(fun, args) if fun.symbol.isConstructor => Some(fun)
-      case t => None
+      case If(cond, thenp, elsep) => shouldInline(thenp, true) && shouldInline(elsep, true)
+      case Block(stats, expr) => shouldInline(expr, forked)
+      case Apply(fun, args) if fun.symbol.isConstructor => true
+      case Apply(fun, args) => forked
+      case t => false
     }
 
   // remove lhs ctors from from tree
-  private def transformCaseClassCtor(lhs: Symbol, tree: Tree)(implicit ctx: Context): Tree = 
+  private def transformCaseClassCtor(lhs: Symbol, tree: Tree, forked: Boolean = false)(implicit ctx: Context): Tree = 
     tree match {
       case t @ If(cond, thenp, elsep) => 
-        If(cond, transformCaseClassCtor(lhs, thenp), transformCaseClassCtor(lhs, elsep))
+        If(cond, transformCaseClassCtor(lhs, thenp, true), transformCaseClassCtor(lhs, elsep, true))
 
       case t @ Block(stats, expr) => 
-        Block(stats, transformCaseClassCtor(lhs, expr))
+        Block(stats, transformCaseClassCtor(lhs, expr, forked))
 
       case t @ Apply(fun, args) if fun.symbol.isConstructor => 
-        val newFields = newFieldsMapping(lhs).values.toList 
-        val newFieldsDefs = newFields.zip(args).map { case (nf, arg) => Assign(ref(nf), arg) }
-        Block(newFieldsDefs, EmptyTree)
+        val newFields        = newFieldsMapping(lhs).values.toList 
+        val newFieldsAssigns = newFields.zip(args).map { case (nf, arg) => Assign(ref(nf), arg) }
+        val recreate         = fun.appliedToArgs(newFields.map(x => ref(x)))
+        Block(newFieldsAssigns, recreate)
+
+      case t: Apply if forked && t.tpe != defn.NothingType => 
+        val temp = ctx.newSymbol(ctx.owner, LocalOptInlineLocalObj.fresh(), Synthetic, t.tpe.finalResultType.widenDealias)
+        val newFields        = newFieldsMapping(lhs)
+        val newFieldsAssigns = newFields.toList.map { case (getter, nf) => Assign(ref(nf), ref(temp).select(getter.name)) }
+        Block(ValDef(temp.asTerm, t) +: newFieldsAssigns, ref(temp))
 
       case t => t
     }
