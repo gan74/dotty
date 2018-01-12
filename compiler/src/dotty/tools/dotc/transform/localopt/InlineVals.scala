@@ -27,17 +27,16 @@ class InlineVals extends Optimisation {
   val impureTimeUsed = newMutableSymbolMap[Int]
 
   def clear(): Unit = {
-    impureTimeUsed.toMap.foreach(x => { if (x._2 < 0) ??? })
     defined.clear()
     timesUsed.clear()
     impureTimeUsed.clear()
   }
 
   def visitor(implicit ctx: Context): Tree => Unit = {
-    case t: ValDef if t.rhs != EmptyTree && isVal(t.symbol) && isPureExpr(t.rhs) =>
+    case t: ValDef if t.symbol.exists && !t.symbol.is(Param) && isVal(t.symbol) && isPureExpr(t.rhs) =>
         defined.put(t.symbol, t)
 
-    case t: ValDef if t.rhs != EmptyTree =>
+    case t: ValDef if t.symbol.exists && !t.symbol.is(Param) =>
         impureTimeUsed.put(t.symbol, 0)
 
     case t: Ident if defined.contains(t.symbol) =>
@@ -49,6 +48,7 @@ class InlineVals extends Optimisation {
 
     case t: Ident if impureTimeUsed.contains(t.symbol) => 
       impureTimeUsed.update(t.symbol, impureTimeUsed(t.symbol) + 1)
+
 
     case _ =>
   }

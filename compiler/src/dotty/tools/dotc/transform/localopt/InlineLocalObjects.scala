@@ -95,14 +95,22 @@ class InlineLocalObjects(val simplifyPhase: Simplify) extends Optimisation {
   }
 
   // should we try to inline this rhs ?
-  private def shouldInline(tree: Tree, forked: Boolean = false)(implicit ctx: Context): Boolean = 
-    tree match {
-      case If(cond, thenp, elsep) => shouldInline(thenp, true) && shouldInline(elsep, true)
-      case Block(stats, expr) => shouldInline(expr, forked)
-      case Apply(fun, args) if fun.symbol.isConstructor => true
-      case Apply(fun, args) => forked
-      case t => false
-    }
+  private def shouldInline(tree: Tree)(implicit ctx: Context): Boolean = {
+    def score(tree: Tree, forked: Boolean): Int =
+      tree match {
+        case If(cond, thenp, elsep) => 
+          val t = score(thenp, true)
+          val e = score(elsep, true)
+          if (math.min(t, e) != 0) math.max(t, e)
+          else 0
+        case Block(stats, expr) => score(expr, forked)
+        case Apply(fun, args) if fun.symbol.isConstructor => 2
+        case Apply(fun, args) if forked => 1
+        case t => 0
+      }
+    score(tree, false) > 1
+  }
+    
 
   // remove lhs ctors from from tree
   private def transformCaseClassCtor(lhs: Symbol, tree: Tree, forked: Boolean = false)(implicit ctx: Context): Tree = 
