@@ -27,7 +27,7 @@ class RemoveUnnecessaryNullChecks extends Optimisation {
 
   // matches sym == null or null == sym
   object NullCheck {
-    def unapply(t: Apply)(implicit ctx: Context): Option[(Symbol, Boolean, Tree)] =
+    def unapply(t: Tree)(implicit ctx: Context): Option[(Symbol, Boolean, Tree)] =
       t match {
         case t @ Apply(Select(id: Ident, op), List(rhs)) if !isVar(id.symbol) && isAlwaysNull(rhs) => 
           if (t.symbol == defn.Object_eq || t.symbol == defn.Any_==) Some((id.symbol, true, rhs))
@@ -37,6 +37,7 @@ class RemoveUnnecessaryNullChecks extends Optimisation {
           if (t.symbol == defn.Object_eq || t.symbol == defn.Any_==) Some((id.symbol, true, lhs))
           else if (t.symbol == defn.Object_ne || t.symbol == defn.Any_!=) Some((id.symbol, false, lhs))
           else None
+        case s @ Select(NullCheck(sym, isNull, rhs), _) if s.symbol eq defn.Boolean_! => Some(sym, !isNull, rhs)
         case _ => None
       }
   }
@@ -54,7 +55,9 @@ class RemoveUnnecessaryNullChecks extends Optimisation {
           override def transform(tree: Tree)(implicit ctx: Context): Tree = {
             val innerCtx = if (tree.isDef && tree.symbol.exists) ctx.withOwner(tree.symbol) else ctx
             super.transform(tree)(innerCtx) match {
-              case t @ NullCheck(sym, isNull, rhs) if nullness.contains(sym) => Block(List(rhs), Literal(Constant(nullness(sym) == isNull)))
+              case t @ NullCheck(sym, isNull, rhs) if nullness.contains(sym) => 
+                println("nullcheck")
+                Block(List(rhs), Literal(Constant(nullness(sym) == isNull)))
               case t => t
             }
           }
@@ -68,8 +71,11 @@ class RemoveUnnecessaryNullChecks extends Optimisation {
         // map statements and propagate nullness
         val newStats = stats.mapConserve {
           case t: ValDef if !isVar(t.symbol) => 
-            if (isAlwaysNull(t.rhs)) nullness += t.symbol -> true
-            if (isNeverNull(t.rhs)) nullness += t.symbol -> false
+            if      (isAlwaysNull(t.rhs)) nullness += t.symbol -> true
+            else if (isNeverNull(t.rhs)) nullness += t.symbol -> false
+            else if (t.rhs.symbol.exists && nullness.contains(t.rhs.symbol)) 
+              nullness += t.symbol -> nullness(t.rhs.symbol)
+            
             transform(t, nullness)
 
           // throw NPE if id is null
@@ -83,19 +89,33 @@ class RemoveUnnecessaryNullChecks extends Optimisation {
 
         cpy.Block(blk)(newStats, transform(expr, nullness))
 
-      // if (x == null)
-      case br @ If(cond @ NullCheck(sym, isNull, _), thenp, elsep) => 
-        val newThen = transform(thenp, mutable.Map(sym -> isNull))
-        val newElse = transform(elsep, mutable.Map(sym -> !isNull))
-        cpy.If(br)(cond, newThen, newElse)
+      case br @ If(cond, thenp, elsep) => 
+        cond match {
+          case NullCheck(sym, isNull, _) => 
+            val newThen = transform(thenp, mutable.Map[Symbol, Boolean](sym -> isNull))
+            val newElse = transform(elsep, mutable.Map[Symbol, Boolean](sym -> !isNull))
+            cpy.If(br)(cond, newThen, newElse)
 
-      // if (x != null)
-      case br @ If(cond @ Select(NullCheck(sym, isNull, _), _), thenp, elsep) if cond.symbol eq defn.Boolean_! =>
-        val newThen = transform(thenp, mutable.Map(sym -> !isNull))
-        val newElse = transform(elsep, mutable.Map(sym -> isNull))
-        cpy.If(br)(cond, newThen, newElse)
+          case _ =>
+            val nullness = mutable.Map[Symbol, Boolean]()
+            for (n <- nullchecksIn(cond)) 
+              n match {
+                case (sym, isNull) => nullness.put(sym, isNull)
+              }
+            val newThen = transform(thenp, nullness)
+            cpy.If(br)(cond, newThen, elsep)
+        }
+       
 
       case t => t
+    }
+  }
+
+  private def nullchecksIn(tree: Tree)(implicit ctx: Context): List[(Symbol, Boolean)] = {
+    tree match {
+      case NullCheck(sym, isNull, _) => List((sym, isNull))
+      case Apply(s @ Select(lhs, _), List(rhs)) if s.symbol == defn.Boolean_&& => nullchecksIn(lhs) ++ nullchecksIn(rhs)
+      case _ => List()
     }
   }
 

@@ -159,6 +159,12 @@ object ConstFold {
     case nme.MOD => Constant(x.doubleValue % y.doubleValue)
     case _ => null
   }
+  private def foldStringOp(op: Name, x: Constant, y: Constant): Constant = op match {
+    case nme.EQ  => Constant(x.stringValue == y.stringValue)
+    case nme.NE  => Constant(x.stringValue != y.stringValue)
+    case nme.ADD => Constant(x.stringValue + y.stringValue)
+    case _ => null
+  }
 
   private def foldBinop(op: Name, x: Constant, y: Constant): Constant = {
     val optag =
@@ -172,7 +178,7 @@ object ConstFold {
       case LongTag                                  => foldLongOp(op, x, y)
       case FloatTag                                 => foldFloatOp(op, x, y)
       case DoubleTag                                => foldDoubleOp(op, x, y)
-      case StringTag if op == nme.ADD               => Constant(x.stringValue + y.stringValue)
+      case StringTag                                => foldStringOp(op, x, y)
       case _                                        => null
     }
     catch {

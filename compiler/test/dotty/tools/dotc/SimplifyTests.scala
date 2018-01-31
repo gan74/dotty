@@ -55,6 +55,34 @@ abstract class SimplifyTests(val optimise: Boolean) extends DottyBytecodeTest {
     }
   }
 
+  @Test def RUNC =
+    check("""println(Tuple2("a", "string"))""",
+       """
+          |val t = Some(Tuple2("a", "string"))
+          |val B = "string"
+          |t match {
+          |  case Some((a, B)) => print(a)
+          |  case Some(x) if x ne null => print(x)
+          |  case _ => print("none")
+          |}
+       """)
+
+  @Test def TEST =
+    check("""print(10)""",
+       """
+          |var sum = 0
+          |val foo: Int => Int = x => {
+          |  print(x)
+          |  x
+          |}
+          |sum = 11
+          |foo(2)
+          |sum = 12
+          |sum = 13
+          |foo(2)
+          |sum = 14
+       """)
+
   @Test def inlineVals =
     check("println(1)",
        """
@@ -237,7 +265,8 @@ abstract class SimplifyTests(val optimise: Boolean) extends DottyBytecodeTest {
         |val i = readLine()
         |val j = readLine()
         |val k = readLine()
-        |if (i != null) if (j != null) if (k == null) {
+        |val b = readBoolean()
+        |if (i != null && j == null && (k != null || b)) {
         |  if(i == null) () else print(i)
         |  if(j != null) print(j)
         |  if(k != null) print(k)
@@ -247,9 +276,10 @@ abstract class SimplifyTests(val optimise: Boolean) extends DottyBytecodeTest {
         |val i = readLine()
         |val j = readLine()
         |val k = readLine()
-        |if (i != null && j != null && k == null) {
+        |val b = readBoolean()
+        |if (i != null && j == null && (k != null || b)) {
         |  print(i)
-        |  print(j)
+        |  if(k != null) print(k)
         |}
       """)
 

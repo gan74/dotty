@@ -22,6 +22,7 @@ class InlineVals extends Optimisation {
   import ast.tpd._
 
   val defined = newMutableSymbolMap[ValDef]
+  val replace = newMutableSymbolMap[Symbol]
   val timesUsed = newMutableSymbolMap[Int]
 
   val impureTimeUsed = newMutableSymbolMap[Int]
@@ -33,11 +34,21 @@ class InlineVals extends Optimisation {
   }
 
   def visitor(implicit ctx: Context): Tree => Unit = {
-    case t: ValDef if t.symbol.exists && !t.symbol.is(Param) && isVal(t.symbol) && isPureExpr(t.rhs) =>
+    case t: ValDef if t.symbol.exists && !t.symbol.is(Param | Method) && isVal(t.symbol) && isPureExpr(t.rhs) =>
+        t.rhs match {
+          case id: Ident if isVal(id.symbol) => replace.put(t.symbol, id.symbol)
+          case _ =>
+        }
         defined.put(t.symbol, t)
 
-    case t: ValDef if t.symbol.exists && !t.symbol.is(Param) =>
+    case t: ValDef if t.symbol.exists && !t.symbol.is(Param | Method) =>
         impureTimeUsed.put(t.symbol, 0)
+
+    case t: ValDef if !t.symbol.is(Method)=>
+      t.rhs match {
+        case id: Ident if isVal(id.symbol) => replace.put(t.symbol, id.symbol)
+        case _ =>
+      }
 
     case t: Ident if defined.contains(t.symbol) =>
       val b4 = timesUsed.getOrElseUpdate(t.symbol, 0)
@@ -50,7 +61,7 @@ class InlineVals extends Optimisation {
       impureTimeUsed.update(t.symbol, impureTimeUsed(t.symbol) + 1)
 
 
-    case _ =>
+    case _ => 
   }
 
   def transformer(implicit ctx: Context): Tree => Tree = {
@@ -58,13 +69,19 @@ class InlineVals extends Optimisation {
       EmptyTree
 
     case t: ValDef if impureTimeUsed.getOrElse(t.symbol, 1) <= 0 =>
+                println("inlineVal")
       t.rhs
 
     case Assign(id: Ident, rhs) if impureTimeUsed.getOrElse(id.symbol, 1) <= 0 =>
+                println("inlineVal")
       rhs
 
     case t: Ident if timesUsed.getOrElse(t.symbol, 0) == 1 =>
-      defined(t.symbol).rhs.changeOwner(t.symbol.owner, ctx.owner)
+      Typed(defined(t.symbol).rhs.changeOwner(t.symbol.owner, ctx.owner), TypeTree(t.symbol.info))
+
+    case t: Ident if replace.contains(t.symbol) =>
+                println("replace")
+      ref(replace(t.symbol))
 
     case t => t
   }

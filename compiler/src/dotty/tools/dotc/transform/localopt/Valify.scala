@@ -106,7 +106,7 @@ class Valify(val simplifyPhase: Simplify) extends Optimisation {
         case t => 
           transform(t)
       }
-
+      
       if ((newStats ne stats) || !valified.isEmpty) {
         val newExpr = transform(expr)
         if (!replaced) blk // valification didn't do anything -> return early
@@ -147,6 +147,8 @@ class Valify(val simplifyPhase: Simplify) extends Optimisation {
       }
     }
 
+    println("valify")
+
     // var which declaration has been dropped and that should be redeclared if still in use
     val redecl = mutable.Set[Symbol]()
 
@@ -183,10 +185,11 @@ class Valify(val simplifyPhase: Simplify) extends Optimisation {
     val newStats = block.stats.mapConserve(cleanup(_))
     val newExpr = cleanup(block.expr)
     Block(newStats, newExpr)
+
   }
 
-  private def isVar(s: Symbol)(implicit ctx: Context): Boolean =  (s.is(Mutable) || s.is(Case)) && !s.is(Method) && !s.owner.isClass
-  private def isVal(s: Symbol)(implicit ctx: Context): Boolean = (!s.is(Mutable) && !s.is(Case)) && !s.is(Method) && !s.owner.isClass
+  private def isVar(s: Symbol)(implicit ctx: Context): Boolean =  s.is(Mutable | Case) && !s.is(Method) && !s.owner.isClass
+  private def isVal(s: Symbol)(implicit ctx: Context): Boolean = !s.is(Mutable | Case) && !s.is(Method) && !s.owner.isClass
 
   private def valifiedSymbol(sym: Symbol)(implicit ctx: Context): Symbol = 
     ctx.newSymbol(

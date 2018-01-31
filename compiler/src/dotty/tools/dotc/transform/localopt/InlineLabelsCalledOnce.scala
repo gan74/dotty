@@ -45,6 +45,7 @@ class InlineLabelsCalledOnce extends Optimisation {
       defined.get(a.symbol) match {
         case Some(defDef) if usedOnce(a.symbol) =>
           simplify.println(s"Inlining labeldef ${defDef.name}")
+          println("inlineLabel")
           val args = a.args
           val params = defDef.vparamss.flatten
           assert(params.size == args.size)
@@ -54,6 +55,7 @@ class InlineLabelsCalledOnce extends Optimisation {
           Block(bindings, defDef.rhs.changeOwner(defDef.symbol, ctx.owner))
 
         case Some(defDef) if defDef.rhs.isInstanceOf[Literal] =>
+          println("inlineLiteral")
           defDef.rhs
 
         case _ => a

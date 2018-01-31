@@ -103,25 +103,55 @@ class Simplify extends MiniPhase with IdentityDenotTransformer {
     if (ctx.settings.optimise.value && !tree.symbol.is(Label)) {
       implicit val ctx: Context = ctx0.withOwner(tree.symbol(ctx0))
       var rhs0 = tree.rhs
+      val start = rhs0
       var rhs1: Tree = null
-      while (rhs1 ne rhs0) {
-        rhs1 = rhs0
-        optimisations.foreach { optimisation =>
-          // Visit
-          rhs0.foreachSubTree(optimisation.visitor)
+      try {
+        while (rhs1 ne rhs0) {
+          rhs1 = rhs0
+          optimisations.foreach { optimisation =>
+            // Visit
+            rhs0.foreachSubTree(optimisation.visitor)
 
-          // Transform
-          rhs0 = new TreeMap() {
-            override def transform(tree: Tree)(implicit ctx: Context): Tree = {
-              val innerCtx = if (tree.isDef && tree.symbol.exists) ctx.withOwner(tree.symbol) else ctx
-              val childOptimizedTree = super.transform(tree)(innerCtx)
-              printIfDifferent(childOptimizedTree, optimisation.transformer(ctx)(childOptimizedTree), optimisation)
+            val st = rhs0
+
+            // Transform
+            rhs0 = new TreeMap() {
+              override def transform(tree: Tree)(implicit ctx: Context): Tree = {
+                val innerCtx = if (tree.isDef && tree.symbol.exists) ctx.withOwner(tree.symbol) else ctx
+                val childOptimizedTree = super.transform(tree)(innerCtx)
+                printIfDifferent(childOptimizedTree, optimisation.transformer(ctx)(childOptimizedTree), optimisation)
+              }
+            }.transform(rhs0)
+
+            if (st ne rhs0) {
+              /*if (optimisation.name == "Valify")*/ {
+                println("----------------------------- " + optimisation.name + " -----------------------------")
+                println(st.show)
+                println("==========>")
+                println(rhs0.show)
+              }
             }
-          }.transform(rhs0)
 
-          // Clean
-          optimisation.clear()
+            // Clean
+            optimisation.clear()
+          }
         }
+        /*if (start ne rhs0) {
+          println("simplify " + tree.symbol.name)
+        }*/
+        if (start ne rhs0) {
+          println("++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++")
+          println(start.show)
+          println("==============>")
+          println(rhs0.show)
+        }
+      } catch {
+        case t: Throwable => 
+          println("caught " + t + " while processing:")
+          println(rhs0.show)
+          println("from:")
+          println(start.show)
+          throw t
       }
       if (rhs0 ne tree.rhs) tpd.cpy.DefDef(tree)(rhs = rhs0)
       else tree
@@ -145,6 +175,14 @@ class Simplify extends MiniPhase with IdentityDenotTransformer {
       }
       t2
     }
+    /*if(tree1 eq tree2) {
+      return tree2
+    }
+    println("----------------------------- " + opt.name + " -----------------------------")
+    println(tree1.show)
+    println("==========>")
+    println(tree2.show)
+    tree2*/
   }
 }
 
